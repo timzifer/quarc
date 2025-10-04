@@ -161,6 +161,8 @@ func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue,
 		return 0
 	}
 
+	logger.Trace().Str("block", b.cfg.ID).Msg("logic block evaluation started")
+
 	ready := b.dependenciesReady(snapshot)
 	var result evaluationResult
 	if ready && b.normal != nil {
@@ -190,6 +192,7 @@ func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue,
 	}
 
 	if result.success {
+		logger.Trace().Str("block", b.cfg.ID).Bool("success", true).Msg("logic block evaluation completed")
 		if err := b.target.setValue(result.value, now); err != nil {
 			logger.Error().Err(err).Str("block", b.cfg.ID).Msg("assign result")
 			b.target.markInvalid(now, "logic.assign", err.Error())
@@ -208,6 +211,7 @@ func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue,
 		errors++
 	}
 	snapshot[b.target.cfg.ID] = b.target.asSnapshotValue()
+	logger.Trace().Str("block", b.cfg.ID).Bool("success", false).Msg("logic block evaluation completed")
 	return errors
 }
 

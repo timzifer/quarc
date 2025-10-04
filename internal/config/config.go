@@ -1,8 +1,12 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -138,32 +142,60 @@ type LokiConfig struct {
 
 // LoggingConfig encapsulates runtime logging options.
 type LoggingConfig struct {
-	Level string     `yaml:"level"`
-	Loki  LokiConfig `yaml:"loki"`
+	Level  string     `yaml:"level"`
+	Format string     `yaml:"format,omitempty"`
+	Loki   LokiConfig `yaml:"loki"`
+}
+
+// ServerCellConfig maps a cell onto an input register address exposed via the embedded Modbus server.
+type ServerCellConfig struct {
+	Cell    string  `yaml:"cell"`
+	Address uint16  `yaml:"address"`
+	Scale   float64 `yaml:"scale,omitempty"`
+	Signed  bool    `yaml:"signed,omitempty"`
+}
+
+// ServerConfig configures the optional embedded Modbus server.
+type ServerConfig struct {
+	Enabled bool               `yaml:"enabled"`
+	Listen  string             `yaml:"listen"`
+	UnitID  uint8              `yaml:"unit_id,omitempty"`
+	Cells   []ServerCellConfig `yaml:"cells"`
 }
 
 // Config is the root configuration structure for the service.
 type Config struct {
 	Cycle    Duration            `yaml:"cycle"`
 	Logging  LoggingConfig       `yaml:"logging"`
+	Modules  []string            `yaml:"modules"`
 	Cells    []CellConfig        `yaml:"cells"`
 	Reads    []ReadGroupConfig   `yaml:"reads"`
 	Writes   []WriteTargetConfig `yaml:"writes"`
 	Logic    []LogicBlockConfig  `yaml:"logic"`
 	Policies GlobalPolicies      `yaml:"policies"`
+	Server   ServerConfig        `yaml:"server"`
 }
 
 // Load reads and decodes the configuration file from disk.
 func Load(path string) (*Config, error) {
-	raw, err := os.ReadFile(path)
+	if path == "" {
+		return nil, errors.New("config path must not be empty")
+	}
+	abs, err := filepath.Abs(path)
 	if err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
+		return nil, fmt.Errorf("resolve config path: %w", err)
 	}
-	var cfg Config
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		return nil, fmt.Errorf("unmarshal config: %w", err)
+
+	info, err := os.Stat(abs)
+	if err != nil {
+		return nil, fmt.Errorf("stat config path: %w", err)
 	}
-	return &cfg, nil
+
+	visited := make(map[string]struct{})
+	if info.IsDir() {
+		return loadDir(abs, visited)
+	}
+	return loadFile(abs, visited)
 }
 
 // CycleInterval returns the configured controller cycle duration.
@@ -172,4 +204,110 @@ func (c *Config) CycleInterval() time.Duration {
 		return 500 * time.Millisecond
 	}
 	return c.Cycle.Duration
+}
+
+func loadFile(path string, visited map[string]struct{}) (*Config, error) {
+	if _, ok := visited[path]; ok {
+		return nil, fmt.Errorf("config include cycle detected at %s", path)
+	}
+	visited[path] = struct{}{}
+	defer delete(visited, path)
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config %s: %w", path, err)
+	}
+	var cfg Config
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		return nil, fmt.Errorf("unmarshal config %s: %w", path, err)
+	}
+
+	modules := cfg.Modules
+	cfg.Modules = nil
+
+	baseDir := filepath.Dir(path)
+	for _, module := range modules {
+		if module == "" {
+			continue
+		}
+		modulePath := module
+		if !filepath.IsAbs(modulePath) {
+			modulePath = filepath.Join(baseDir, module)
+		}
+
+		info, err := os.Stat(modulePath)
+		if err != nil {
+			return nil, fmt.Errorf("load module %s: %w", module, err)
+		}
+
+		var modCfg *Config
+		if info.IsDir() {
+			modCfg, err = loadDir(modulePath, visited)
+		} else {
+			modCfg, err = loadFile(modulePath, visited)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("load module %s: %w", module, err)
+		}
+		mergeConfig(&cfg, modCfg)
+	}
+
+	return &cfg, nil
+}
+
+func loadDir(path string, visited map[string]struct{}) (*Config, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config dir %s: %w", path, err)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+
+	result := &Config{}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		ext := strings.ToLower(filepath.Ext(name))
+		if ext != ".yaml" && ext != ".yml" {
+			continue
+		}
+		subPath := filepath.Join(path, name)
+		cfg, err := loadFile(subPath, visited)
+		if err != nil {
+			return nil, err
+		}
+		mergeConfig(result, cfg)
+	}
+	return result, nil
+}
+
+func mergeConfig(dst, src *Config) {
+	if dst == nil || src == nil {
+		return
+	}
+
+	if src.Cycle.Duration != 0 {
+		dst.Cycle = src.Cycle
+	}
+	if src.Logging.Level != "" {
+		dst.Logging.Level = src.Logging.Level
+	}
+	if src.Logging.Format != "" {
+		dst.Logging.Format = src.Logging.Format
+	}
+	if src.Logging.Loki.Enabled || src.Logging.Loki.URL != "" || len(src.Logging.Loki.Labels) > 0 {
+		dst.Logging.Loki = src.Logging.Loki
+	}
+	if src.Policies != (GlobalPolicies{}) {
+		dst.Policies = src.Policies
+	}
+	if src.Server.Enabled || src.Server.Listen != "" || src.Server.UnitID != 0 || len(src.Server.Cells) > 0 {
+		dst.Server = src.Server
+	}
+
+	dst.Cells = append(dst.Cells, src.Cells...)
+	dst.Reads = append(dst.Reads, src.Reads...)
+	dst.Writes = append(dst.Writes, src.Writes...)
+	dst.Logic = append(dst.Logic, src.Logic...)
 }

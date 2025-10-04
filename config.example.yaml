@@ -1,6 +1,7 @@
 cycle: 500ms
 logging:
   level: info
+  format: text
 cells:
   - id: raw_temperature
     type: number
@@ -62,3 +63,13 @@ logic:
       )
     fallback: |
       success(valid("temperature_c") ? false : fail("logic.dependency", "temperature unavailable"))
+server:
+  enabled: true
+  listen: ":15020"
+  unit_id: 1
+  cells:
+    - cell: temperature_c
+      address: 0
+      scale: 0.1
+    - cell: heater_enabled
+      address: 1
