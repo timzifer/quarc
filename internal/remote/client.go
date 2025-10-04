@@ -21,7 +21,7 @@ type Client interface {
 }
 
 // ClientFactory is responsible for creating Modbus clients for remote calls.
-type ClientFactory func(cfg config.RemoteRegisterConfig) (Client, error)
+type ClientFactory func(cfg config.EndpointConfig) (Client, error)
 
 type tcpClient struct {
 	handler *modbus.TCPClientHandler
@@ -30,13 +30,17 @@ type tcpClient struct {
 
 // NewTCPClientFactory returns a factory that creates TCP Modbus clients.
 func NewTCPClientFactory() ClientFactory {
-	return func(cfg config.RemoteRegisterConfig) (Client, error) {
+	return func(cfg config.EndpointConfig) (Client, error) {
 		if cfg.Address == "" {
 			return nil, fmt.Errorf("remote address is required")
 		}
 		handler := modbus.NewTCPClientHandler(cfg.Address)
 		handler.SlaveId = cfg.UnitID
-		handler.Timeout = 5 * time.Second
+		timeout := cfg.Timeout.Duration
+		if timeout <= 0 {
+			timeout = 5 * time.Second
+		}
+		handler.Timeout = timeout
 		if err := handler.Connect(); err != nil {
 			return nil, fmt.Errorf("connect remote %s: %w", cfg.Address, err)
 		}
