@@ -78,6 +78,11 @@ func (g *readGroup) perform(now time.Time, factory remote.ClientFactory, logger 
 		return 0
 	}
 
+	logger.Trace().Str("group", g.cfg.ID).Str("function", strings.ToLower(g.cfg.Function)).Uint16("start", g.cfg.Start).Uint16("length", g.cfg.Length).Msg("read group scheduled")
+
+	if g.client == nil {
+		logger.Trace().Str("group", g.cfg.ID).Msg("creating modbus read client")
+	}
 	client, err := g.ensureClient(factory)
 	if err != nil {
 		g.invalidateAll(now, "read.connect", err.Error())
@@ -99,6 +104,7 @@ func (g *readGroup) perform(now time.Time, factory remote.ClientFactory, logger 
 			errors++
 		}
 	}
+	logger.Trace().Str("group", g.cfg.ID).Int("signals", len(g.signals)).Msg("read group completed")
 	return errors
 }
 

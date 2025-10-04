@@ -34,6 +34,7 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to create service")
 	}
+	defer srv.Close()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

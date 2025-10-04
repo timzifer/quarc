@@ -30,11 +30,13 @@ The normal AST only executes when all declared dependencies exist and are valid.
 Configuration is provided as YAML (see [`config.example.yaml`](config.example.yaml)). Key sections:
 
 * `cycle` – Global cycle time.
+* `modules` – Optional list of additional YAML snippets to load (relative to the parent file). The loader also accepts directories, processing all `*.yaml`/`*.yml` files in lexical order, which makes `config.d`-style setups trivial.
 * `cells` – Definitions of all local memory cells.
 * `reads` – Modbus block reads (slave endpoint, function, address range, TTL and signal mapping into cells).
 * `logic` – Logic blocks with dependency declarations, normal/fallback ASTs and target cell.
 * `writes` – Modbus write targets with deadband, rate limit and priority options.
-* `logging` / `policies` – Runtime logging setup and optional global policies (retry behaviour, watchdog, readback, etc.).
+* `logging` / `policies` – Runtime logging setup and optional global policies (retry behaviour, watchdog, readback, etc.). `logging.format` controls the stdout renderer (`json` by default, `text` for human friendly console output).
+* `server` – Configuration for the embedded Modbus/TCP server that exposes cells as input registers.
 
 ### Example snippet
 
@@ -59,6 +61,16 @@ logic:
 ```
 
 See the full [`config.example.yaml`](config.example.yaml) for a complete configuration including reads and writes.
+
+### Splitting configuration files
+
+Use the `modules` directive to include additional YAML documents from the main configuration. Paths are resolved relative to the parent file, and may reference either files or directories. When a directory is supplied (for example `config.d`), every `.yaml` / `.yml` file is merged in lexical order, allowing you to organise large installations across multiple files without manual concatenation.
+
+### Embedded Modbus server
+
+When `server.enabled` is `true`, the processor starts an integrated Modbus/TCP server. Cells mapped in `server.cells` are exposed as input registers, making the current controller state available to external systems. Numeric cells are scaled according to the provided `scale` factor and can be marked as signed, while boolean cells are exported as 0/1 values.
+
+Trace level logging now provides detailed insights into each READ/EVAL/COMMIT step, including the Modbus server update cycle.
 
 ## Running
 

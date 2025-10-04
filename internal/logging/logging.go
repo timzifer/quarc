@@ -25,7 +25,12 @@ func Setup(cfg config.LoggingConfig) (zerolog.Logger, func(), error) {
 		level = parsed
 	}
 
-	writers := []io.Writer{os.Stdout}
+	var stdout io.Writer = os.Stdout
+	if strings.EqualFold(cfg.Format, "text") {
+		stdout = zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}
+	}
+
+	writers := []io.Writer{stdout}
 	cleanup := func() {}
 
 	if cfg.Loki.Enabled {

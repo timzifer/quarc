@@ -22,6 +22,7 @@ type Service struct {
 	logic   []*logicBlock
 	ordered []*logicBlock
 	writes  []*writeTarget
+	server  *modbusServer
 
 	cycle   time.Duration
 	metrics metrics
@@ -59,6 +60,14 @@ func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory
 	if err != nil {
 		return nil, err
 	}
+	var srv *modbusServer
+	if cfg.Server.Enabled {
+		serverLogger := logger.With().Str("component", "modbus_server").Logger()
+		srv, err = newModbusServer(cfg.Server, cells, serverLogger)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	svc := &Service{
 		cfg:           cfg,
@@ -69,6 +78,7 @@ func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory
 		logic:         logic,
 		ordered:       ordered,
 		writes:        writes,
+		server:        srv,
 		cycle:         cfg.CycleInterval(),
 	}
 	return svc, nil
@@ -98,6 +108,7 @@ func (s *Service) IterateOnce(ctx context.Context, now time.Time) error {
 	snapshot := s.cells.snapshot()
 	evalErrors := s.evalPhase(now, snapshot)
 	writeErrors := s.commitPhase(ctx, now)
+	s.server.refresh(snapshot)
 
 	s.metrics.CycleCount++
 	s.metrics.LastDuration = time.Since(start)
@@ -144,4 +155,20 @@ func (s *Service) CellSnapshot() map[string]*snapshotValue {
 // Metrics returns the last recorded metrics snapshot.
 func (s *Service) Metrics() metrics {
 	return s.metrics
+}
+
+// Close releases all background resources held by the service.
+func (s *Service) Close() error {
+	if s.server != nil {
+		s.server.close()
+	}
+	return nil
+}
+
+// ServerAddress returns the listen address of the embedded Modbus server, if enabled.
+func (s *Service) ServerAddress() string {
+	if s.server == nil {
+		return ""
+	}
+	return s.server.addr()
 }

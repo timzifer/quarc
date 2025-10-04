@@ -60,24 +60,31 @@ func shouldPrecede(a, b *writeTarget) bool {
 
 func (t *writeTarget) commit(now time.Time, factory remote.ClientFactory, logger zerolog.Logger) int {
 	errors := 0
+	logger.Trace().Str("target", t.cfg.ID).Msg("write target evaluation started")
 	if t.cell == nil {
 		return 0
 	}
 	if !t.cell.valid {
+		logger.Trace().Str("target", t.cfg.ID).Msg("skipping invalid cell")
 		return 0
 	}
 
 	if limit := t.cfg.RateLimit.Duration; limit > 0 && !t.lastWrite.IsZero() {
 		if now.Before(t.lastWrite.Add(limit)) {
+			logger.Trace().Str("target", t.cfg.ID).Dur("rate_limit", limit).Msg("skipping due to rate limit")
 			return 0
 		}
 	}
 
 	current := t.cell.value
 	if !t.shouldWrite(current) {
+		logger.Trace().Str("target", t.cfg.ID).Msg("no significant change detected")
 		return 0
 	}
 
+	if t.client == nil {
+		logger.Trace().Str("target", t.cfg.ID).Msg("creating modbus write client")
+	}
 	client, err := t.ensureClient(factory)
 	if err != nil {
 		logger.Error().Err(err).Str("target", t.cfg.ID).Msg("write client unavailable")
@@ -91,6 +98,7 @@ func (t *writeTarget) commit(now time.Time, factory remote.ClientFactory, logger
 
 	t.lastValue = cloneValue(current)
 	t.lastWrite = now
+	logger.Trace().Str("target", t.cfg.ID).Time("timestamp", now).Msg("write target committed")
 	return errors
 }
 
