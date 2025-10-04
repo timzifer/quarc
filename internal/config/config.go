@@ -39,47 +39,94 @@ func (d Duration) MarshalYAML() (interface{}, error) {
 	return d.Duration.String(), nil
 }
 
-// RemoteRegisterConfig describes how to interact with a remote Modbus endpoint.
-type RemoteRegisterConfig struct {
-	Address      string            `yaml:"address"`
-	UnitID       uint8             `yaml:"unit_id"`
-	Type         string            `yaml:"type"`
-	Register     uint16            `yaml:"register"`
-	Interval     Duration          `yaml:"interval"`
-	PushOnUpdate bool              `yaml:"push_on_update"`
-	Metadata     map[string]string `yaml:"metadata,omitempty"`
+// ValueKind describes the primitive type stored inside a cell.
+type ValueKind string
+
+const (
+	// ValueKindNumber represents floating point numbers.
+	ValueKindNumber ValueKind = "number"
+	// ValueKindBool represents boolean values.
+	ValueKindBool ValueKind = "bool"
+	// ValueKindString represents plain UTF-8 strings.
+	ValueKindString ValueKind = "string"
+)
+
+// EndpointConfig describes how to reach a Modbus slave.
+type EndpointConfig struct {
+	Address string   `yaml:"address"`
+	UnitID  uint8    `yaml:"unit_id"`
+	Timeout Duration `yaml:"timeout,omitempty"`
 }
 
-// BaseRegisterConfig contains the shared configuration for a register.
-type BaseRegisterConfig struct {
-	Name       string                `yaml:"name"`
-	Address    uint16                `yaml:"address"`
-	Expression string                `yaml:"expression,omitempty"`
-	Remote     *RemoteRegisterConfig `yaml:"remote,omitempty"`
+// CellConfig configures a local memory cell.
+type CellConfig struct {
+	ID       string    `yaml:"id"`
+	Type     ValueKind `yaml:"type"`
+	Unit     string    `yaml:"unit,omitempty"`
+	TTL      Duration  `yaml:"ttl,omitempty"`
+	Scale    float64   `yaml:"scale,omitempty"`
+	Metadata yaml.Node `yaml:"metadata,omitempty"`
 }
 
-// CoilConfig describes a coil register.
-type CoilConfig struct {
-	BaseRegisterConfig `yaml:",inline"`
-	InitialValue       bool `yaml:"initial_value"`
+// ReadSignalConfig maps a portion of a Modbus read block into a cell.
+type ReadSignalConfig struct {
+	Cell       string    `yaml:"cell"`
+	Offset     uint16    `yaml:"offset"`
+	Bit        *uint8    `yaml:"bit,omitempty"`
+	Type       ValueKind `yaml:"type"`
+	Scale      float64   `yaml:"scale,omitempty"`
+	Endianness string    `yaml:"endianness,omitempty"`
+	Signed     bool      `yaml:"signed,omitempty"`
 }
 
-// DiscreteInputConfig describes a discrete input register.
-type DiscreteInputConfig struct {
-	BaseRegisterConfig `yaml:",inline"`
-	InitialValue       bool `yaml:"initial_value"`
+// ReadGroupConfig describes a block read.
+type ReadGroupConfig struct {
+	ID       string             `yaml:"id"`
+	Endpoint EndpointConfig     `yaml:"endpoint"`
+	Function string             `yaml:"function"`
+	Start    uint16             `yaml:"start"`
+	Length   uint16             `yaml:"length"`
+	TTL      Duration           `yaml:"ttl"`
+	Signals  []ReadSignalConfig `yaml:"signals"`
 }
 
-// HoldingRegisterConfig describes a holding register.
-type HoldingRegisterConfig struct {
-	BaseRegisterConfig `yaml:",inline"`
-	InitialValue       uint16 `yaml:"initial_value"`
+// WriteTargetConfig describes how a cell is pushed to Modbus.
+type WriteTargetConfig struct {
+	ID         string         `yaml:"id"`
+	Cell       string         `yaml:"cell"`
+	Endpoint   EndpointConfig `yaml:"endpoint"`
+	Function   string         `yaml:"function"`
+	Address    uint16         `yaml:"address"`
+	Scale      float64        `yaml:"scale,omitempty"`
+	Endianness string         `yaml:"endianness,omitempty"`
+	Signed     bool           `yaml:"signed,omitempty"`
+	Deadband   float64        `yaml:"deadband,omitempty"`
+	RateLimit  Duration       `yaml:"rate_limit,omitempty"`
+	Priority   int            `yaml:"priority,omitempty"`
 }
 
-// InputRegisterConfig describes an input register.
-type InputRegisterConfig struct {
-	BaseRegisterConfig `yaml:",inline"`
-	InitialValue       uint16 `yaml:"initial_value"`
+// DependencyConfig describes a dependency for a logic block.
+type DependencyConfig struct {
+	Cell string    `yaml:"cell"`
+	Type ValueKind `yaml:"type"`
+}
+
+// LogicBlockConfig describes a single logic evaluation block.
+type LogicBlockConfig struct {
+	ID           string             `yaml:"id"`
+	Target       string             `yaml:"target"`
+	Dependencies []DependencyConfig `yaml:"dependencies"`
+	Normal       string             `yaml:"normal"`
+	Fallback     string             `yaml:"fallback"`
+	Metadata     yaml.Node          `yaml:"metadata,omitempty"`
+}
+
+// GlobalPolicies configure optional behaviours shared by the controller.
+type GlobalPolicies struct {
+	RetryBackoff   Duration `yaml:"retry_backoff,omitempty"`
+	RetryMax       int      `yaml:"retry_max,omitempty"`
+	ReadbackVerify bool     `yaml:"readback_verify,omitempty"`
+	WatchdogCell   string   `yaml:"watchdog_cell,omitempty"`
 }
 
 // LokiConfig configures optional Loki integration for logging.
@@ -97,13 +144,13 @@ type LoggingConfig struct {
 
 // Config is the root configuration structure for the service.
 type Config struct {
-	ListenAddress string                  `yaml:"listen_address"`
-	LoopDuration  Duration                `yaml:"loop_duration"`
-	Logging       LoggingConfig           `yaml:"logging"`
-	Coils         []CoilConfig            `yaml:"coils"`
-	Discrete      []DiscreteInputConfig   `yaml:"discrete_inputs"`
-	Holding       []HoldingRegisterConfig `yaml:"holding_registers"`
-	Input         []InputRegisterConfig   `yaml:"input_registers"`
+	Cycle    Duration            `yaml:"cycle"`
+	Logging  LoggingConfig       `yaml:"logging"`
+	Cells    []CellConfig        `yaml:"cells"`
+	Reads    []ReadGroupConfig   `yaml:"reads"`
+	Writes   []WriteTargetConfig `yaml:"writes"`
+	Logic    []LogicBlockConfig  `yaml:"logic"`
+	Policies GlobalPolicies      `yaml:"policies"`
 }
 
 // Load reads and decodes the configuration file from disk.
@@ -119,10 +166,10 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// LoopInterval returns the configured loop interval or a default value.
-func (c *Config) LoopInterval() time.Duration {
-	if c == nil || c.LoopDuration.Duration <= 0 {
-		return time.Second
+// CycleInterval returns the configured controller cycle duration.
+func (c *Config) CycleInterval() time.Duration {
+	if c == nil || c.Cycle.Duration <= 0 {
+		return 500 * time.Millisecond
 	}
-	return c.LoopDuration.Duration
+	return c.Cycle.Duration
 }

@@ -1,0 +1,64 @@
+cycle: 500ms
+logging:
+  level: info
+cells:
+  - id: raw_temperature
+    type: number
+    unit: counts
+  - id: temperature_c
+    type: number
+    unit: "°C"
+  - id: heater_enabled
+    type: bool
+  - id: heater_command
+    type: bool
+reads:
+  - id: temperature_sensor
+    endpoint:
+      address: "192.168.10.10:502"
+      unit_id: 1
+    function: holding
+    start: 0
+    length: 1
+    ttl: 1s
+    signals:
+      - cell: raw_temperature
+        offset: 0
+        type: number
+        scale: 0.1
+writes:
+  - id: heater_output
+    cell: heater_command
+    endpoint:
+      address: "192.168.10.20:502"
+      unit_id: 1
+    function: coil
+    address: 5
+    rate_limit: 2s
+    priority: 10
+logic:
+  - id: convert_temperature
+    target: temperature_c
+    dependencies:
+      - cell: raw_temperature
+        type: number
+    normal: |
+      success(value("raw_temperature"))
+    fallback: |
+      success(0)
+  - id: heater_control
+    target: heater_command
+    dependencies:
+      - cell: temperature_c
+        type: number
+      - cell: heater_enabled
+        type: bool
+    normal: |
+      success(
+        !value("heater_enabled") ? false :
+        value("temperature_c") < 18 ? true :
+        value("temperature_c") > 21 ? false :
+        fallback()
+      )
+    fallback: |
+      success(valid("temperature_c") ? false : fail("logic.dependency", "temperature unavailable"))
