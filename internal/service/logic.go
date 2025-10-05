@@ -244,7 +244,7 @@ func uniqueDependencies(program *vm.Program, allowValid bool) []string {
 	}
 	node := program.Node()
 	collector := &dependencyCollector{allowValid: allowValid}
-	ast.Walk(&node, collector)
+	collector.walk(node)
 	deps := make([]string, 0, len(collector.names))
 	for name := range collector.names {
 		deps = append(deps, name)
@@ -256,22 +256,94 @@ func uniqueDependencies(program *vm.Program, allowValid bool) []string {
 type dependencyCollector struct {
 	allowValid bool
 	names      map[string]struct{}
+	locals     map[string]int
+}
+
+func (c *dependencyCollector) walk(node ast.Node) {
+	if node == nil {
+		return
+	}
+	switch n := node.(type) {
+	case *ast.NilNode, *ast.IntegerNode, *ast.FloatNode, *ast.BoolNode, *ast.StringNode,
+		*ast.ConstantNode, *ast.PointerNode:
+		// No dependencies to collect.
+	case *ast.IdentifierNode:
+		c.addName(n.Value)
+	case *ast.UnaryNode:
+		c.walk(n.Node)
+	case *ast.BinaryNode:
+		c.walk(n.Left)
+		c.walk(n.Right)
+	case *ast.ChainNode:
+		c.walk(n.Node)
+	case *ast.MemberNode:
+		c.walk(n.Node)
+		c.walk(n.Property)
+	case *ast.SliceNode:
+		c.walk(n.Node)
+		if n.From != nil {
+			c.walk(n.From)
+		}
+		if n.To != nil {
+			c.walk(n.To)
+		}
+	case *ast.CallNode:
+		c.walk(n.Callee)
+		for _, arg := range n.Arguments {
+			c.walk(arg)
+		}
+		if ident, ok := n.Callee.(*ast.IdentifierNode); ok {
+			switch ident.Value {
+			case "value":
+				c.collectCallArgs(n)
+			case "valid":
+				if c.allowValid {
+					c.collectCallArgs(n)
+				}
+			}
+		}
+	case *ast.BuiltinNode:
+		for _, arg := range n.Arguments {
+			c.walk(arg)
+		}
+		if n.Map != nil {
+			c.walk(n.Map)
+		}
+	case *ast.ClosureNode:
+		c.walk(n.Node)
+	case *ast.VariableDeclaratorNode:
+		c.walk(n.Value)
+		c.pushLocal(n.Name)
+		c.walk(n.Expr)
+		c.popLocal(n.Name)
+	case *ast.ConditionalNode:
+		c.walk(n.Cond)
+		c.walk(n.Exp1)
+		c.walk(n.Exp2)
+	case *ast.ArrayNode:
+		for _, child := range n.Nodes {
+			c.walk(child)
+		}
+	case *ast.MapNode:
+		for _, pair := range n.Pairs {
+			c.walk(pair)
+		}
+	case *ast.PairNode:
+		c.walk(n.Key)
+		c.walk(n.Value)
+	default:
+		// Fallback to the default walker to ensure we don't miss future node types.
+		ast.Walk(&node, c)
+	}
 }
 
 func (c *dependencyCollector) Visit(node *ast.Node) {
-	if c.names == nil {
-		c.names = make(map[string]struct{})
-	}
 	switch n := (*node).(type) {
 	case *ast.IdentifierNode:
-		if _, reserved := reservedIdentifiers[n.Value]; reserved {
-			return
-		}
-		c.names[n.Value] = struct{}{}
+		c.addName(n.Value)
 	case *ast.CallNode:
 		if ident, ok := n.Callee.(*ast.IdentifierNode); ok {
-			name := ident.Value
-			switch name {
+			switch ident.Value {
 			case "value":
 				c.collectCallArgs(n)
 			case "valid":
@@ -283,17 +355,57 @@ func (c *dependencyCollector) Visit(node *ast.Node) {
 	}
 }
 
+func (c *dependencyCollector) addName(name string) {
+	if name == "" {
+		return
+	}
+	if _, reserved := reservedIdentifiers[name]; reserved {
+		return
+	}
+	if c.locals != nil {
+		if count := c.locals[name]; count > 0 {
+			return
+		}
+	}
+	if c.names == nil {
+		c.names = make(map[string]struct{})
+	}
+	c.names[name] = struct{}{}
+}
+
+func (c *dependencyCollector) pushLocal(name string) {
+	if name == "" {
+		return
+	}
+	if c.locals == nil {
+		c.locals = make(map[string]int)
+	}
+	c.locals[name]++
+}
+
+func (c *dependencyCollector) popLocal(name string) {
+	if name == "" || c.locals == nil {
+		return
+	}
+	if c.locals[name] <= 1 {
+		delete(c.locals, name)
+	} else {
+		c.locals[name]--
+	}
+}
+
 func (c *dependencyCollector) collectCallArgs(node *ast.CallNode) {
 	for _, arg := range node.Arguments {
 		switch a := arg.(type) {
 		case *ast.StringNode:
 			if a.Value != "" {
+				if c.names == nil {
+					c.names = make(map[string]struct{})
+				}
 				c.names[a.Value] = struct{}{}
 			}
 		case *ast.IdentifierNode:
-			if a.Value != "" {
-				c.names[a.Value] = struct{}{}
-			}
+			c.addName(a.Value)
 		}
 	}
 }
