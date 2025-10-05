@@ -33,7 +33,7 @@ Configuration is provided as YAML (see [`config.example.yaml`](config.example.ya
 * `modules` – Optional list of additional YAML snippets to load (relative to the parent file). The loader also accepts directories, processing all `*.yaml`/`*.yml` files in lexical order, which makes `config.d`-style setups trivial.
 * `cells` – Definitions of all local memory cells.
 * `reads` – Modbus block reads (slave endpoint, function, address range, TTL and signal mapping into cells).
-* `logic` – Logic blocks with dependency declarations, normal/fallback ASTs and target cell.
+* `logic` – Logic blocks with normal/fallback ASTs and a target cell. Dependencies are automatically discovered from the expressions.
 * `writes` – Modbus write targets with deadband, rate limit and priority options.
 * `logging` / `policies` – Runtime logging setup and optional global policies (retry behaviour, watchdog, readback, etc.). `logging.format` controls the stdout renderer (`json` by default, `text` for human friendly console output).
 * `server` – Configuration for the embedded Modbus/TCP server that exposes cells as input registers.
@@ -44,11 +44,6 @@ Configuration is provided as YAML (see [`config.example.yaml`](config.example.ya
 logic:
   - id: heater_control
     target: heater_command
-    dependencies:
-      - cell: temperature_c
-        type: number
-      - cell: heater_enabled
-        type: bool
     normal: |
       success(
         !value("heater_enabled") ? false :
@@ -82,6 +77,8 @@ Trace level logging now provides detailed insights into each READ/EVAL/COMMIT st
    ```bash
    ./modbus_processor --config path/to/config.yaml
    ```
+
+   Use `--config-check` to produce a detailed logic validation report without starting the service, or `--healthcheck` to perform a lightweight configuration validation suitable for Docker health probes.
 
 The service logs with [zerolog](https://github.com/rs/zerolog) and can optionally stream logs to Loki when configured.
 

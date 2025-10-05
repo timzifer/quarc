@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/vm"
 	"github.com/rs/zerolog"
 
@@ -19,12 +21,14 @@ type logicDependency struct {
 }
 
 type logicBlock struct {
-	cfg      config.LogicBlockConfig
-	target   *cell
-	deps     []logicDependency
-	normal   *vm.Program
-	fallback *vm.Program
-	order    int
+	cfg                   config.LogicBlockConfig
+	target                *cell
+	deps                  []logicDependency
+	normal                *vm.Program
+	fallback              *vm.Program
+	order                 int
+	normalDependencyIDs   []string
+	fallbackDependencyIDs []string
 }
 
 type evaluationResult struct {
@@ -52,43 +56,32 @@ type fallbackSignal struct{}
 
 func (fallbackSignal) Error() string { return "fallback" }
 
-func newLogicBlocks(cfgs []config.LogicBlockConfig, cells *cellStore) ([]*logicBlock, []*logicBlock, error) {
+func newLogicBlocks(cfgs []config.LogicBlockConfig, cells *cellStore, logger zerolog.Logger) ([]*logicBlock, []*logicBlock, error) {
 	blocks := make([]*logicBlock, 0, len(cfgs))
 	producers := make(map[string]*logicBlock)
+	logicLogger := logger.With().Str("component", "logic").Logger()
 
 	for idx, cfg := range cfgs {
-		if cfg.ID == "" {
-			return nil, nil, fmt.Errorf("logic block id must not be empty")
-		}
-		target, err := cells.mustGet(cfg.Target)
+		block, _, err := prepareLogicBlock(cfg, cells, idx)
 		if err != nil {
-			return nil, nil, fmt.Errorf("logic block %s: %w", cfg.ID, err)
+			return nil, nil, err
 		}
-		block := &logicBlock{cfg: cfg, target: target, order: idx}
-		for _, depCfg := range cfg.Dependencies {
-			depCell, err := cells.mustGet(depCfg.Cell)
-			if err != nil {
-				return nil, nil, fmt.Errorf("logic block %s: %w", cfg.ID, err)
-			}
-			if depCell.cfg.Type != depCfg.Type {
-				return nil, nil, fmt.Errorf("logic block %s dependency %s expects %s but cell is %s", cfg.ID, depCfg.Cell, depCfg.Type, depCell.cfg.Type)
-			}
-			block.deps = append(block.deps, logicDependency{cell: depCell, kind: depCfg.Type})
+
+		if block.normal != nil {
+			logicLogger.Debug().
+				Str("block", cfg.ID).
+				Str("expression", strings.TrimSpace(cfg.Normal)).
+				Strs("dependencies", block.normalDependencyIDs).
+				Msg("logic block normal expression")
 		}
-		if cfg.Normal != "" {
-			program, err := compileExpression(cfg.Normal)
-			if err != nil {
-				return nil, nil, fmt.Errorf("logic block %s normal: %w", cfg.ID, err)
-			}
-			block.normal = program
+		if block.fallback != nil {
+			logicLogger.Debug().
+				Str("block", cfg.ID).
+				Str("expression", strings.TrimSpace(cfg.Fallback)).
+				Strs("dependencies", block.fallbackDependencyIDs).
+				Msg("logic block fallback expression")
 		}
-		if cfg.Fallback != "" {
-			program, err := compileExpression(cfg.Fallback)
-			if err != nil {
-				return nil, nil, fmt.Errorf("logic block %s fallback: %w", cfg.ID, err)
-			}
-			block.fallback = program
-		}
+
 		if existing, ok := producers[cfg.Target]; ok {
 			return nil, nil, fmt.Errorf("cells %s produced by multiple blocks (%s and %s)", cfg.Target, existing.cfg.ID, cfg.ID)
 		}
@@ -106,6 +99,203 @@ func newLogicBlocks(cfgs []config.LogicBlockConfig, cells *cellStore) ([]*logicB
 
 func compileExpression(exprStr string) (*vm.Program, error) {
 	return expr.Compile(exprStr, expr.Env(map[string]interface{}{}), expr.AllowUndefinedVariables())
+}
+
+type dependencyMeta struct {
+	normal     bool
+	fallback   bool
+	configured bool
+	cell       *cell
+}
+
+func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, order int) (*logicBlock, map[string]*dependencyMeta, error) {
+	block := &logicBlock{cfg: cfg, order: order}
+	meta := make(map[string]*dependencyMeta)
+
+	ensure := func(id string) *dependencyMeta {
+		if id == "" {
+			return nil
+		}
+		entry, ok := meta[id]
+		if !ok {
+			entry = &dependencyMeta{}
+			meta[id] = entry
+		}
+		return entry
+	}
+
+	if cfg.ID == "" {
+		return block, meta, fmt.Errorf("logic block id must not be empty")
+	}
+
+	target, err := cells.mustGet(cfg.Target)
+	if err != nil {
+		return block, meta, fmt.Errorf("logic block %s: %w", cfg.ID, err)
+	}
+	block.target = target
+
+	normalIDs := make(map[string]struct{})
+	fallbackIDs := make(map[string]struct{})
+
+	for _, depCfg := range cfg.Dependencies {
+		entry := ensure(depCfg.Cell)
+		if entry == nil {
+			continue
+		}
+		entry.normal = true
+		entry.configured = true
+		depCell, depErr := cells.mustGet(depCfg.Cell)
+		if depErr != nil {
+			return block, meta, fmt.Errorf("logic block %s dependency %s: %w", cfg.ID, depCfg.Cell, depErr)
+		}
+		if depCfg.Type != "" && depCell.cfg.Type != depCfg.Type {
+			return block, meta, fmt.Errorf("logic block %s dependency %s expects %s but cell is %s", cfg.ID, depCfg.Cell, depCfg.Type, depCell.cfg.Type)
+		}
+		entry.cell = depCell
+		normalIDs[depCfg.Cell] = struct{}{}
+	}
+
+	if cfg.Normal != "" {
+		program, err := compileExpression(cfg.Normal)
+		if err != nil {
+			return block, meta, fmt.Errorf("logic block %s normal: %w", cfg.ID, err)
+		}
+		block.normal = program
+		for _, dep := range uniqueDependencies(program, false) {
+			entry := ensure(dep)
+			if entry == nil {
+				continue
+			}
+			entry.normal = true
+			normalIDs[dep] = struct{}{}
+		}
+	}
+
+	if cfg.Fallback != "" {
+		program, err := compileExpression(cfg.Fallback)
+		if err != nil {
+			return block, meta, fmt.Errorf("logic block %s fallback: %w", cfg.ID, err)
+		}
+		block.fallback = program
+		for _, dep := range uniqueDependencies(program, true) {
+			entry := ensure(dep)
+			if entry == nil {
+				continue
+			}
+			entry.fallback = true
+			fallbackIDs[dep] = struct{}{}
+		}
+	}
+
+	for id, entry := range meta {
+		if entry.cell != nil {
+			continue
+		}
+		depCell, depErr := cells.mustGet(id)
+		if depErr != nil {
+			switch {
+			case entry.normal:
+				return block, meta, fmt.Errorf("logic block %s dependency %s: %w", cfg.ID, id, depErr)
+			case entry.fallback:
+				return block, meta, fmt.Errorf("logic block %s fallback dependency %s: %w", cfg.ID, id, depErr)
+			default:
+				return block, meta, fmt.Errorf("logic block %s dependency %s: %w", cfg.ID, id, depErr)
+			}
+		}
+		entry.cell = depCell
+	}
+
+	block.normalDependencyIDs = sortKeys(normalIDs)
+	block.fallbackDependencyIDs = sortKeys(fallbackIDs)
+
+	deps := make([]logicDependency, 0, len(block.normalDependencyIDs))
+	for _, id := range block.normalDependencyIDs {
+		entry := meta[id]
+		if entry == nil || entry.cell == nil {
+			continue
+		}
+		deps = append(deps, logicDependency{cell: entry.cell, kind: entry.cell.cfg.Type})
+	}
+	block.deps = deps
+
+	return block, meta, nil
+}
+
+func sortKeys(values map[string]struct{}) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+var reservedIdentifiers = map[string]struct{}{
+	"success":  {},
+	"fail":     {},
+	"fallback": {},
+	"value":    {},
+	"valid":    {},
+}
+
+func uniqueDependencies(program *vm.Program, allowValid bool) []string {
+	if program == nil {
+		return nil
+	}
+	node := program.Node()
+	collector := &dependencyCollector{allowValid: allowValid}
+	ast.Walk(&node, collector)
+	deps := make([]string, 0, len(collector.names))
+	for name := range collector.names {
+		deps = append(deps, name)
+	}
+	sort.Strings(deps)
+	return deps
+}
+
+type dependencyCollector struct {
+	allowValid bool
+	names      map[string]struct{}
+}
+
+func (c *dependencyCollector) Visit(node *ast.Node) {
+	if c.names == nil {
+		c.names = make(map[string]struct{})
+	}
+	switch n := (*node).(type) {
+	case *ast.IdentifierNode:
+		if _, reserved := reservedIdentifiers[n.Value]; reserved {
+			return
+		}
+		c.names[n.Value] = struct{}{}
+	case *ast.CallNode:
+		if ident, ok := n.Callee.(*ast.IdentifierNode); ok {
+			name := ident.Value
+			switch name {
+			case "value":
+				c.collectCallArgs(n)
+			case "valid":
+				if c.allowValid {
+					c.collectCallArgs(n)
+				}
+			}
+		}
+	}
+}
+
+func (c *dependencyCollector) collectCallArgs(node *ast.CallNode) {
+	for _, arg := range node.Arguments {
+		switch a := arg.(type) {
+		case *ast.StringNode:
+			if a.Value != "" {
+				c.names[a.Value] = struct{}{}
+			}
+		case *ast.IdentifierNode:
+			if a.Value != "" {
+				c.names[a.Value] = struct{}{}
+			}
+		}
+	}
 }
 
 func topoSort(blocks []*logicBlock, producers map[string]*logicBlock) ([]*logicBlock, error) {

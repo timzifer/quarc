@@ -33,44 +33,14 @@ type modbusServer struct {
 }
 
 func newModbusServer(cfg config.ServerConfig, cells *cellStore, logger zerolog.Logger) (*modbusServer, error) {
-	if cfg.Listen == "" {
-		cfg.Listen = ":15020"
+	cfg, mappings, err := prepareServer(cfg, cells)
+	if err != nil {
+		return nil, err
 	}
-	if len(cfg.Cells) == 0 {
-		return nil, fmt.Errorf("modbus server requires at least one cell mapping")
-	}
+
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return nil, fmt.Errorf("listen modbus server on %s: %w", cfg.Listen, err)
-	}
-
-	mappings := make([]serverMapping, 0, len(cfg.Cells))
-	used := make(map[uint16]struct{}, len(cfg.Cells))
-	for _, cellCfg := range cfg.Cells {
-		cell, err := cells.mustGet(cellCfg.Cell)
-		if err != nil {
-			listener.Close()
-			return nil, fmt.Errorf("modbus server: %w", err)
-		}
-		if cell.cfg.Type == config.ValueKindString {
-			listener.Close()
-			return nil, fmt.Errorf("modbus server: cell %s uses unsupported type string", cellCfg.Cell)
-		}
-		if _, exists := used[cellCfg.Address]; exists {
-			listener.Close()
-			return nil, fmt.Errorf("modbus server: duplicate address %d", cellCfg.Address)
-		}
-		used[cellCfg.Address] = struct{}{}
-		scale := cellCfg.Scale
-		if scale == 0 {
-			scale = 1
-		}
-		mappings = append(mappings, serverMapping{
-			cell:    cell,
-			address: cellCfg.Address,
-			scale:   scale,
-			signed:  cellCfg.Signed,
-		})
 	}
 
 	srv := &modbusServer{
@@ -87,6 +57,43 @@ func newModbusServer(cfg config.ServerConfig, cells *cellStore, logger zerolog.L
 
 	logger.Info().Str("listen", listener.Addr().String()).Msg("modbus server started")
 	return srv, nil
+}
+
+func prepareServer(cfg config.ServerConfig, cells *cellStore) (config.ServerConfig, []serverMapping, error) {
+	if cfg.Listen == "" {
+		cfg.Listen = ":15020"
+	}
+	if len(cfg.Cells) == 0 {
+		return cfg, nil, fmt.Errorf("modbus server requires at least one cell mapping")
+	}
+
+	mappings := make([]serverMapping, 0, len(cfg.Cells))
+	used := make(map[uint16]struct{}, len(cfg.Cells))
+	for _, cellCfg := range cfg.Cells {
+		cell, err := cells.mustGet(cellCfg.Cell)
+		if err != nil {
+			return cfg, nil, fmt.Errorf("modbus server: %w", err)
+		}
+		if cell.cfg.Type == config.ValueKindString {
+			return cfg, nil, fmt.Errorf("modbus server: cell %s uses unsupported type string", cellCfg.Cell)
+		}
+		if _, exists := used[cellCfg.Address]; exists {
+			return cfg, nil, fmt.Errorf("modbus server: duplicate address %d", cellCfg.Address)
+		}
+		used[cellCfg.Address] = struct{}{}
+		scale := cellCfg.Scale
+		if scale == 0 {
+			scale = 1
+		}
+		mappings = append(mappings, serverMapping{
+			cell:    cell,
+			address: cellCfg.Address,
+			scale:   scale,
+			signed:  cellCfg.Signed,
+		})
+	}
+
+	return cfg, mappings, nil
 }
 
 func (s *modbusServer) acceptLoop() {

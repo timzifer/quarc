@@ -91,18 +91,16 @@ func TestDeterministicCycle(t *testing.T) {
 		},
 		Logic: []config.LogicBlockConfig{
 			{
-				ID:           "deg_c_calc",
-				Target:       "deg_c",
-				Dependencies: []config.DependencyConfig{{Cell: "raw_temp", Type: config.ValueKindNumber}},
-				Normal:       "success(value(\"raw_temp\") * 0.1)",
-				Fallback:     "success(0)",
+				ID:       "deg_c_calc",
+				Target:   "deg_c",
+				Normal:   "success(value(\"raw_temp\") * 0.1)",
+				Fallback: "success(0)",
 			},
 			{
-				ID:           "alarm_logic",
-				Target:       "alarm",
-				Dependencies: []config.DependencyConfig{{Cell: "deg_c", Type: config.ValueKindNumber}},
-				Normal:       "success(value(\"deg_c\") > 20)",
-				Fallback:     "success(false)",
+				ID:       "alarm_logic",
+				Target:   "alarm",
+				Normal:   "success(value(\"deg_c\") > 20)",
+				Fallback: "success(false)",
 			},
 		},
 		Writes: []config.WriteTargetConfig{
@@ -165,11 +163,10 @@ func TestFallbackExecutedOnInvalidDependency(t *testing.T) {
 		},
 		Logic: []config.LogicBlockConfig{
 			{
-				ID:           "compute",
-				Target:       "output_b",
-				Dependencies: []config.DependencyConfig{{Cell: "input_a", Type: config.ValueKindNumber}},
-				Normal:       "success(value(\"input_a\") * 2)",
-				Fallback:     "success(valid(\"input_a\") ? value(\"input_a\") : 42)",
+				ID:       "compute",
+				Target:   "output_b",
+				Normal:   "success(value(\"input_a\") * 2)",
+				Fallback: "success(valid(\"input_a\") ? value(\"input_a\") : 42)",
 			},
 		},
 	}
