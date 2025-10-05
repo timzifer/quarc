@@ -97,10 +97,16 @@ func (e *dslEngine) buildHelper(cfg config.HelperFunctionConfig) (*helperFunctio
 }
 
 func (e *dslEngine) preprocess(input string) (string, error) {
-	if !e.allowIfBlocks {
-		return input, nil
+	processed := input
+	var err error
+	if e.allowIfBlocks {
+		processed, err = convertIfBlocks(processed)
+		if err != nil {
+			return "", err
+		}
 	}
-	return convertIfBlocks(input)
+	processed = convertStandaloneCalls(processed)
+	return processed, nil
 }
 
 func (e *dslEngine) compileExpression(exprStr string) (*vm.Program, error) {
