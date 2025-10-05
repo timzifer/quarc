@@ -53,6 +53,16 @@ func (f *fakeClient) WriteSingleRegister(address, value uint16) ([]byte, error) 
 
 func (f *fakeClient) Close() error { return nil }
 
+type countingClient struct {
+	fakeClient
+	closed int
+}
+
+func (c *countingClient) Close() error {
+	c.closed++
+	return nil
+}
+
 func TestDeterministicCycle(t *testing.T) {
 	client := &fakeClient{}
 	client.readHoldingFn = func(address, quantity uint16) ([]byte, error) {
@@ -380,5 +390,206 @@ func TestModbusServerExposesCells(t *testing.T) {
 	}
 	if flagValue != 1 {
 		t.Fatalf("expected flag register 1, got %d", flagValue)
+	}
+}
+
+func TestServiceManualCellOperations(t *testing.T) {
+	cfg := &config.Config{
+		Cycle: config.Duration{Duration: time.Millisecond},
+		Cells: []config.CellConfig{{ID: "manual", Type: config.ValueKindNumber}},
+	}
+	logger := zerolog.New(io.Discard)
+	svc, err := New(cfg, logger, func(config.EndpointConfig) (remote.Client, error) {
+		return &fakeClient{}, nil
+	})
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	defer svc.Close()
+
+	if err := svc.SetCellValue("manual", 42); err != nil {
+		t.Fatalf("set cell value: %v", err)
+	}
+
+	state, err := svc.InspectCell("manual")
+	if err != nil {
+		t.Fatalf("inspect cell: %v", err)
+	}
+	if !state.Valid {
+		t.Fatalf("expected cell to be valid")
+	}
+	if state.UpdatedAt.IsZero() {
+		t.Fatalf("expected updated timestamp to be set")
+	}
+	if got, ok := state.Value.(float64); !ok || got != 42 {
+		t.Fatalf("expected value 42, got %v", state.Value)
+	}
+	if state.Diagnosis != nil {
+		t.Fatalf("unexpected diagnosis: %+v", state.Diagnosis)
+	}
+
+	if err := svc.InvalidateCell("manual", "manual.override", "forced invalid"); err != nil {
+		t.Fatalf("invalidate cell: %v", err)
+	}
+
+	state, err = svc.InspectCell("manual")
+	if err != nil {
+		t.Fatalf("inspect cell after invalidate: %v", err)
+	}
+	if state.Valid {
+		t.Fatalf("expected cell to be invalid")
+	}
+	if state.Diagnosis == nil || state.Diagnosis.Code != "manual.override" {
+		t.Fatalf("expected diagnosis with code manual.override, got %+v", state.Diagnosis)
+	}
+	if state.Diagnosis.Message != "forced invalid" {
+		t.Fatalf("unexpected diagnosis message: %v", state.Diagnosis.Message)
+	}
+}
+
+func TestServiceClosesRemoteClients(t *testing.T) {
+	cfg := &config.Config{
+		Cycle: config.Duration{Duration: time.Millisecond},
+		Cells: []config.CellConfig{
+			{ID: "input", Type: config.ValueKindNumber},
+			{ID: "output", Type: config.ValueKindBool},
+		},
+		Reads: []config.ReadGroupConfig{{
+			ID:       "rg",
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1},
+			Function: "holding",
+			Start:    0,
+			Length:   1,
+			Signals: []config.ReadSignalConfig{{
+				Cell:   "input",
+				Offset: 0,
+				Type:   config.ValueKindNumber,
+			}},
+		}},
+		Logic: []config.LogicBlockConfig{{
+			ID:       "logic",
+			Target:   "output",
+			Normal:   "success(value(\"input\") > 0)",
+			Fallback: "success(false)",
+		}},
+		Writes: []config.WriteTargetConfig{{
+			ID:       "wt",
+			Cell:     "output",
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1},
+			Function: "coil",
+			Address:  0,
+		}},
+	}
+
+	clients := make([]*countingClient, 0, 2)
+	factory := func(config.EndpointConfig) (remote.Client, error) {
+		client := &countingClient{}
+		client.readHoldingFn = func(address, quantity uint16) ([]byte, error) {
+			return []byte{0x00, 0x01}, nil
+		}
+		client.writeCoilFn = func(address, value uint16) ([]byte, error) {
+			return nil, nil
+		}
+		clients = append(clients, client)
+		return client, nil
+	}
+
+	logger := zerolog.New(io.Discard)
+	svc, err := New(cfg, logger, factory)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	if err := svc.IterateOnce(context.Background(), time.Now()); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+
+	if err := svc.Close(); err != nil {
+		t.Fatalf("close service: %v", err)
+	}
+
+	if len(clients) == 0 {
+		t.Fatalf("expected clients to be created")
+	}
+	for idx, client := range clients {
+		if client.closed == 0 {
+			t.Fatalf("expected client %d to be closed", idx)
+		}
+	}
+}
+
+func TestSetCellValueUpdatesServerImmediately(t *testing.T) {
+	cfg := &config.Config{
+		Cells: []config.CellConfig{{ID: "number", Type: config.ValueKindNumber}},
+		Server: config.ServerConfig{
+			Enabled: true,
+			Listen:  "127.0.0.1:0",
+			UnitID:  1,
+			Cells: []config.ServerCellConfig{{
+				Cell:    "number",
+				Address: 0,
+				Scale:   0.1,
+			}},
+		},
+	}
+	logger := zerolog.New(io.Discard)
+	svc, err := New(cfg, logger, func(config.EndpointConfig) (remote.Client, error) {
+		return &fakeClient{}, nil
+	})
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	defer svc.Close()
+
+	if err := svc.SetCellValue("number", 12.3); err != nil {
+		t.Fatalf("set cell value: %v", err)
+	}
+
+	addr := svc.ServerAddress()
+	if addr == "" {
+		t.Fatalf("expected server address")
+	}
+
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		t.Fatalf("dial server: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+
+	request := make([]byte, 12)
+	binary.BigEndian.PutUint16(request[0:2], 1)
+	binary.BigEndian.PutUint16(request[2:4], 0)
+	binary.BigEndian.PutUint16(request[4:6], 6)
+	request[6] = 1
+	request[7] = 0x04
+	binary.BigEndian.PutUint16(request[8:10], 0)
+	binary.BigEndian.PutUint16(request[10:12], 1)
+
+	if _, err := conn.Write(request); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+
+	header := make([]byte, 7)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		t.Fatalf("read header: %v", err)
+	}
+	length := int(binary.BigEndian.Uint16(header[4:6]))
+	if length <= 1 {
+		t.Fatalf("invalid length: %d", length)
+	}
+	pdu := make([]byte, length-1)
+	if _, err := io.ReadFull(conn, pdu); err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if pdu[0] != 0x04 {
+		t.Fatalf("unexpected function code: %d", pdu[0])
+	}
+	if pdu[1] != 2 {
+		t.Fatalf("unexpected byte count: %d", pdu[1])
+	}
+	value := binary.BigEndian.Uint16(pdu[2:4])
+	if value != 123 {
+		t.Fatalf("expected register value 123, got %d", value)
 	}
 }

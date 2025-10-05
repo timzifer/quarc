@@ -86,6 +86,7 @@ func (g *readGroup) perform(now time.Time, factory remote.ClientFactory, logger 
 	client, err := g.ensureClient(factory)
 	if err != nil {
 		g.invalidateAll(now, "read.connect", err.Error())
+		g.closeClient()
 		logger.Error().Err(err).Str("group", g.cfg.ID).Msg("read group connection failed")
 		return 1
 	}
@@ -93,6 +94,7 @@ func (g *readGroup) perform(now time.Time, factory remote.ClientFactory, logger 
 	raw, err := g.read(client)
 	if err != nil {
 		g.invalidateAll(now, "read.error", err.Error())
+		g.closeClient()
 		logger.Error().Err(err).Str("group", g.cfg.ID).Msg("modbus read failed")
 		return 1
 	}
@@ -142,6 +144,14 @@ func (g *readGroup) invalidateAll(ts time.Time, code, message string) {
 	for _, sig := range g.signals {
 		sig.cell.markInvalid(ts, code, message)
 	}
+}
+
+func (g *readGroup) closeClient() {
+	if g.client == nil {
+		return
+	}
+	_ = g.client.Close()
+	g.client = nil
 }
 
 func (s *readSignal) apply(raw []byte, function string, ts time.Time) error {
