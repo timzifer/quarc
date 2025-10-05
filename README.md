@@ -22,8 +22,10 @@ Expressions are compiled with [`expr`](https://github.com/expr-lang/expr). The f
 | `fail(code?, msg?)` | Marks the target cell invalid, storing the optional diagnostic code/message. |
 | `fallback()` | Immediately switches to the fallback AST. |
 | `valid(id)` | *(fallback AST only)* Returns `true` if the referenced cell exists and is valid. |
+| `dump(value)` | Logs the provided value at debug level and returns it unchanged. Useful for inspecting intermediate results. |
+| `log(message?, values...)` | Emits an info level log entry annotated with the current block/helper context. The first argument can be a message string followed by optional values. |
 
-The normal AST only executes when all declared dependencies exist and are valid. Fallback ASTs typically provide defaults or soft-fail behaviour.
+The normal AST only executes when all declared dependencies exist and are valid. Fallback ASTs typically provide defaults or soft-fail behaviour. Helper functions follow the same contract and must call `success(...)` to return a value; completing without a `success` signal is treated as an error.
 
 ## Configuration
 

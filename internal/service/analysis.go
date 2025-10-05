@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rs/zerolog"
+
 	"modbus_processor/internal/config"
 )
 
@@ -32,7 +34,7 @@ func AnalyzeLogic(cfg *config.Config) ([]LogicBlockReport, error) {
 		return nil, fmt.Errorf("config must not be nil")
 	}
 
-	dsl, err := newDSLEngine(cfg.DSL, cfg.Helpers)
+	dsl, err := newDSLEngine(cfg.DSL, cfg.Helpers, zerolog.Nop())
 	if err != nil {
 		return nil, err
 	}

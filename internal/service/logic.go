@@ -475,7 +475,7 @@ func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue,
 	ready := b.dependenciesReady(snapshot)
 	var result evaluationResult
 	if ready && b.normal != nil {
-		result = b.runProgram(now, snapshot, b.normal, false)
+		result = b.runProgram(now, snapshot, b.normal, false, b.cfg.Normal, "normal")
 		if result.err != nil {
 			logger.Error().Err(result.err).Str("block", b.cfg.ID).Msg("normal evaluation failed")
 			errors++
@@ -489,7 +489,7 @@ func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue,
 
 	if !ready {
 		if b.fallback != nil {
-			result = b.runProgram(now, snapshot, b.fallback, true)
+			result = b.runProgram(now, snapshot, b.fallback, true, b.cfg.Fallback, "fallback")
 			if result.err != nil {
 				logger.Error().Err(result.err).Str("block", b.cfg.ID).Msg("fallback evaluation failed")
 				errors++
@@ -537,7 +537,7 @@ func (b *logicBlock) dependenciesReady(snapshot map[string]*snapshotValue) bool 
 	return true
 }
 
-func (b *logicBlock) runProgram(now time.Time, snapshot map[string]*snapshotValue, program *vm.Program, fallback bool) evaluationResult {
+func (b *logicBlock) runProgram(now time.Time, snapshot map[string]*snapshotValue, program *vm.Program, fallback bool, expression string, expressionKind string) evaluationResult {
 	env := make(map[string]interface{}, len(snapshot)+5)
 	for id, value := range snapshot {
 		if value != nil {
@@ -545,7 +545,18 @@ func (b *logicBlock) runProgram(now time.Time, snapshot map[string]*snapshotValu
 		}
 	}
 
-	ctx := &dslContext{snapshot: snapshot}
+	trimmedExpr := strings.TrimSpace(expression)
+	blockLogger := b.dsl.logger.With().
+		Str("block", b.cfg.ID).
+		Logger()
+	ctx := &dslContext{
+		snapshot:       snapshot,
+		logger:         &blockLogger,
+		originKind:     "logic",
+		originID:       b.cfg.ID,
+		expression:     trimmedExpr,
+		expressionKind: expressionKind,
+	}
 	env["value"] = ctx.value
 	env["success"] = ctx.success
 	env["fail"] = ctx.fail
@@ -553,6 +564,8 @@ func (b *logicBlock) runProgram(now time.Time, snapshot map[string]*snapshotValu
 	if fallback {
 		env["valid"] = ctx.valid
 	}
+	env["dump"] = ctx.dump
+	env["log"] = ctx.log
 	if b.dsl != nil {
 		b.dsl.injectHelpers(env)
 	}
@@ -586,7 +599,12 @@ func (b *logicBlock) runProgram(now time.Time, snapshot map[string]*snapshotValu
 }
 
 type dslContext struct {
-	snapshot map[string]*snapshotValue
+	snapshot       map[string]*snapshotValue
+	logger         *zerolog.Logger
+	originKind     string
+	originID       string
+	expression     string
+	expressionKind string
 }
 
 func (c *dslContext) value(id string) interface{} {
@@ -626,4 +644,53 @@ func (c *dslContext) fallback() interface{} {
 func (c *dslContext) valid(id string) bool {
 	snap := c.snapshot[id]
 	return snap != nil && snap.Valid
+}
+
+func (c *dslContext) dump(value interface{}) interface{} {
+	if c.logger != nil {
+		event := c.logger.Debug()
+		event = c.decorateEvent(event)
+		event.Interface("value", value).Msg("dsl dump")
+	}
+	return value
+}
+
+func (c *dslContext) log(args ...interface{}) interface{} {
+	if c.logger == nil {
+		return nil
+	}
+	event := c.logger.Info()
+	event = c.decorateEvent(event)
+	message := "dsl log"
+	if len(args) > 0 {
+		if s, ok := args[0].(string); ok {
+			message = s
+			args = args[1:]
+		}
+	}
+	switch len(args) {
+	case 0:
+	case 1:
+		event.Interface("value", args[0])
+	default:
+		event.Interface("values", args)
+	}
+	event.Msg(message)
+	return nil
+}
+
+func (c *dslContext) decorateEvent(event *zerolog.Event) *zerolog.Event {
+	if c.originKind != "" {
+		event = event.Str("origin_kind", c.originKind)
+	}
+	if c.originID != "" {
+		event = event.Str("origin_id", c.originID)
+	}
+	if c.expressionKind != "" {
+		event = event.Str("expression_kind", c.expressionKind)
+	}
+	if c.expression != "" {
+		event = event.Str("expression", c.expression)
+	}
+	return event
 }
