@@ -49,6 +49,39 @@ func TestPrepareLogicBlockAutoDependencies(t *testing.T) {
 	}
 }
 
+func TestPrepareLogicBlockIgnoresLocalVariables(t *testing.T) {
+	cells, err := newCellStore([]config.CellConfig{
+		{ID: "return_underfloor_heating_temperature", Type: config.ValueKindNumber},
+		{ID: "raw_flow_sensor_underfloor_heating", Type: config.ValueKindNumber},
+		{ID: "target", Type: config.ValueKindNumber},
+	})
+	if err != nil {
+		t.Fatalf("newCellStore: %v", err)
+	}
+
+	expression := `
+let temperature = return_underfloor_heating_temperature;
+let flow_sensor_current = value("raw_flow_sensor_underfloor_heating") / 1000 - 4;
+success(flow_sensor_current - (0.8 * 1) + 0.8)
+`
+
+	cfg := config.LogicBlockConfig{
+		ID:     "flow_sensor_underfloor_heating",
+		Target: "target",
+		Normal: expression,
+	}
+
+	block, _, err := prepareLogicBlock(cfg, cells, 0)
+	if err != nil {
+		t.Fatalf("prepareLogicBlock: %v", err)
+	}
+
+	want := []string{"raw_flow_sensor_underfloor_heating", "return_underfloor_heating_temperature"}
+	if got := block.normalDependencyIDs; !equalStringSlices(got, want) {
+		t.Fatalf("normal dependencies = %v, want %v", got, want)
+	}
+}
+
 func TestPrepareLogicBlockMissingFallbackDependency(t *testing.T) {
 	cells, err := newCellStore([]config.CellConfig{
 		{ID: "input", Type: config.ValueKindNumber},

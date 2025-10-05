@@ -7,6 +7,7 @@ import (
 	"math"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -30,6 +31,8 @@ type modbusServer struct {
 	mappings  []serverMapping
 	registers []uint16
 	mu        sync.RWMutex
+	connsMu   sync.Mutex
+	conns     map[net.Conn]struct{}
 }
 
 func newModbusServer(cfg config.ServerConfig, cells *cellStore, logger zerolog.Logger) (*modbusServer, error) {
@@ -50,6 +53,7 @@ func newModbusServer(cfg config.ServerConfig, cells *cellStore, logger zerolog.L
 		stopCh:    make(chan struct{}),
 		mappings:  mappings,
 		registers: make([]uint16, 65536),
+		conns:     make(map[net.Conn]struct{}),
 	}
 
 	srv.wg.Add(1)
@@ -113,6 +117,7 @@ func (s *modbusServer) acceptLoop() {
 			continue
 		}
 		s.wg.Add(1)
+		s.trackConn(conn)
 		go s.handleConn(conn)
 	}
 }
@@ -120,6 +125,7 @@ func (s *modbusServer) acceptLoop() {
 func (s *modbusServer) handleConn(conn net.Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
+	defer s.untrackConn(conn)
 
 	for {
 		header := make([]byte, 7)
@@ -286,6 +292,7 @@ func (s *modbusServer) close() {
 	s.stopOnce.Do(func() {
 		close(s.stopCh)
 		_ = s.listener.Close()
+		s.closeAllConns()
 	})
 	s.wg.Wait()
 	s.logger.Info().Msg("modbus server stopped")
@@ -310,4 +317,42 @@ func isClosedConnError(err error) bool {
 		return true
 	}
 	return false
+}
+
+func (s *modbusServer) trackConn(conn net.Conn) {
+	if conn == nil {
+		return
+	}
+	s.connsMu.Lock()
+	s.conns[conn] = struct{}{}
+	s.connsMu.Unlock()
+}
+
+func (s *modbusServer) untrackConn(conn net.Conn) {
+	if conn == nil {
+		return
+	}
+	s.connsMu.Lock()
+	delete(s.conns, conn)
+	s.connsMu.Unlock()
+}
+
+func (s *modbusServer) closeAllConns() {
+	s.connsMu.Lock()
+	conns := make([]net.Conn, 0, len(s.conns))
+	for conn := range s.conns {
+		conns = append(conns, conn)
+	}
+	s.connsMu.Unlock()
+
+	for _, conn := range conns {
+		_ = conn.SetDeadline(time.Now())
+		_ = conn.Close()
+	}
+
+	s.connsMu.Lock()
+	for _, conn := range conns {
+		delete(s.conns, conn)
+	}
+	s.connsMu.Unlock()
 }

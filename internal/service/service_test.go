@@ -227,6 +227,58 @@ func TestCycleDetection(t *testing.T) {
 	}
 }
 
+func TestServiceCloseShutsDownServerConnections(t *testing.T) {
+	cfg := &config.Config{
+		Cycle: config.Duration{Duration: time.Millisecond},
+		Cells: []config.CellConfig{{ID: "foo", Type: config.ValueKindNumber}},
+		Server: config.ServerConfig{
+			Enabled: true,
+			Listen:  "127.0.0.1:0",
+			Cells: []config.ServerCellConfig{{
+				Cell:    "foo",
+				Address: 0,
+			}},
+		},
+	}
+
+	logger := zerolog.New(io.Discard)
+	svc, err := New(cfg, logger, nil)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	addr := svc.ServerAddress()
+	if addr == "" {
+		t.Fatalf("expected server address")
+	}
+
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		t.Fatalf("dial modbus server: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := svc.Close(); err != nil {
+			t.Errorf("service close: %v", err)
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("service close timed out")
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	buf := make([]byte, 1)
+	if _, err := conn.Read(buf); err == nil {
+		t.Fatalf("expected connection to be closed")
+	}
+	_ = conn.Close()
+}
+
 func TestModbusServerExposesCells(t *testing.T) {
 	cfg := &config.Config{
 		Cycle: config.Duration{Duration: time.Millisecond},
