@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/vm"
 	"github.com/rs/zerolog"
@@ -26,6 +25,7 @@ type logicBlock struct {
 	deps                  []logicDependency
 	normal                *vm.Program
 	fallback              *vm.Program
+	dsl                   *dslEngine
 	order                 int
 	normalDependencyIDs   []string
 	fallbackDependencyIDs []string
@@ -56,13 +56,13 @@ type fallbackSignal struct{}
 
 func (fallbackSignal) Error() string { return "fallback" }
 
-func newLogicBlocks(cfgs []config.LogicBlockConfig, cells *cellStore, logger zerolog.Logger) ([]*logicBlock, []*logicBlock, error) {
+func newLogicBlocks(cfgs []config.LogicBlockConfig, cells *cellStore, dsl *dslEngine, logger zerolog.Logger) ([]*logicBlock, []*logicBlock, error) {
 	blocks := make([]*logicBlock, 0, len(cfgs))
 	producers := make(map[string]*logicBlock)
 	logicLogger := logger.With().Str("component", "logic").Logger()
 
 	for idx, cfg := range cfgs {
-		block, _, err := prepareLogicBlock(cfg, cells, idx)
+		block, _, err := prepareLogicBlock(cfg, cells, dsl, idx)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -97,10 +97,6 @@ func newLogicBlocks(cfgs []config.LogicBlockConfig, cells *cellStore, logger zer
 	return blocks, ordered, nil
 }
 
-func compileExpression(exprStr string) (*vm.Program, error) {
-	return expr.Compile(exprStr, expr.Env(map[string]interface{}{}), expr.AllowUndefinedVariables())
-}
-
 type dependencyMeta struct {
 	normal     bool
 	fallback   bool
@@ -108,8 +104,8 @@ type dependencyMeta struct {
 	cell       *cell
 }
 
-func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, order int) (*logicBlock, map[string]*dependencyMeta, error) {
-	block := &logicBlock{cfg: cfg, order: order}
+func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEngine, order int) (*logicBlock, map[string]*dependencyMeta, error) {
+	block := &logicBlock{cfg: cfg, dsl: dsl, order: order}
 	meta := make(map[string]*dependencyMeta)
 
 	ensure := func(id string) *dependencyMeta {
@@ -155,13 +151,18 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, order int)
 		normalIDs[depCfg.Cell] = struct{}{}
 	}
 
+	var helperNames map[string]struct{}
+	if dsl != nil {
+		helperNames = dsl.helperNames()
+	}
+
 	if cfg.Normal != "" {
-		program, err := compileExpression(cfg.Normal)
+		program, err := dsl.compileExpression(cfg.Normal)
 		if err != nil {
 			return block, meta, fmt.Errorf("logic block %s normal: %w", cfg.ID, err)
 		}
 		block.normal = program
-		for _, dep := range uniqueDependencies(program, false) {
+		for _, dep := range uniqueDependencies(program, false, helperNames) {
 			entry := ensure(dep)
 			if entry == nil {
 				continue
@@ -172,12 +173,12 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, order int)
 	}
 
 	if cfg.Fallback != "" {
-		program, err := compileExpression(cfg.Fallback)
+		program, err := dsl.compileExpression(cfg.Fallback)
 		if err != nil {
 			return block, meta, fmt.Errorf("logic block %s fallback: %w", cfg.ID, err)
 		}
 		block.fallback = program
-		for _, dep := range uniqueDependencies(program, true) {
+		for _, dep := range uniqueDependencies(program, true, helperNames) {
 			entry := ensure(dep)
 			if entry == nil {
 				continue
@@ -238,12 +239,12 @@ var reservedIdentifiers = map[string]struct{}{
 	"valid":    {},
 }
 
-func uniqueDependencies(program *vm.Program, allowValid bool) []string {
+func uniqueDependencies(program *vm.Program, allowValid bool, helpers map[string]struct{}) []string {
 	if program == nil {
 		return nil
 	}
 	node := program.Node()
-	collector := &dependencyCollector{allowValid: allowValid}
+	collector := &dependencyCollector{allowValid: allowValid, helpers: helpers}
 	collector.walk(node)
 	deps := make([]string, 0, len(collector.names))
 	for name := range collector.names {
@@ -257,6 +258,7 @@ type dependencyCollector struct {
 	allowValid bool
 	names      map[string]struct{}
 	locals     map[string]int
+	helpers    map[string]struct{}
 }
 
 func (c *dependencyCollector) walk(node ast.Node) {
@@ -361,6 +363,11 @@ func (c *dependencyCollector) addName(name string) {
 	}
 	if _, reserved := reservedIdentifiers[name]; reserved {
 		return
+	}
+	if c.helpers != nil {
+		if _, ok := c.helpers[name]; ok {
+			return
+		}
 	}
 	if c.locals != nil {
 		if count := c.locals[name]; count > 0 {
@@ -545,6 +552,9 @@ func (b *logicBlock) runProgram(now time.Time, snapshot map[string]*snapshotValu
 	env["fallback"] = ctx.fallback
 	if fallback {
 		env["valid"] = ctx.valid
+	}
+	if b.dsl != nil {
+		b.dsl.injectHelpers(env)
 	}
 
 	result := evaluationResult{}

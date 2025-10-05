@@ -32,6 +32,10 @@ func AnalyzeLogic(cfg *config.Config) ([]LogicBlockReport, error) {
 		return nil, fmt.Errorf("config must not be nil")
 	}
 
+	dsl, err := newDSLEngine(cfg.DSL)
+	if err != nil {
+		return nil, err
+	}
 	cells, err := newCellStore(cfg.Cells)
 	if err != nil {
 		return nil, err
@@ -46,7 +50,7 @@ func AnalyzeLogic(cfg *config.Config) ([]LogicBlockReport, error) {
 			FallbackExpression: strings.TrimSpace(blockCfg.Fallback),
 		}
 
-		block, meta, buildErr := prepareLogicBlock(blockCfg, cells, idx)
+		block, meta, buildErr := prepareLogicBlock(blockCfg, cells, dsl, idx)
 		if block != nil && block.target != nil {
 			report.TargetType = block.target.cfg.Type
 		}

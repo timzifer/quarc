@@ -125,6 +125,19 @@ type LogicBlockConfig struct {
 	Metadata     yaml.Node          `yaml:"metadata,omitempty"`
 }
 
+// HelperFunctionConfig defines a standalone helper function that can be used from logic expressions.
+type HelperFunctionConfig struct {
+	Name       string   `yaml:"name"`
+	Arguments  []string `yaml:"arguments"`
+	Expression string   `yaml:"expression"`
+}
+
+// DSLConfig configures expression language extensions.
+type DSLConfig struct {
+	AllowIfBlocks *bool                  `yaml:"allow_if_blocks,omitempty"`
+	Helpers       []HelperFunctionConfig `yaml:"helpers,omitempty"`
+}
+
 // GlobalPolicies configure optional behaviours shared by the controller.
 type GlobalPolicies struct {
 	RetryBackoff   Duration `yaml:"retry_backoff,omitempty"`
@@ -172,6 +185,7 @@ type Config struct {
 	Reads    []ReadGroupConfig   `yaml:"reads"`
 	Writes   []WriteTargetConfig `yaml:"writes"`
 	Logic    []LogicBlockConfig  `yaml:"logic"`
+	DSL      DSLConfig           `yaml:"dsl"`
 	Policies GlobalPolicies      `yaml:"policies"`
 	Server   ServerConfig        `yaml:"server"`
 }
@@ -298,6 +312,12 @@ func mergeConfig(dst, src *Config) {
 	}
 	if src.Logging.Loki.Enabled || src.Logging.Loki.URL != "" || len(src.Logging.Loki.Labels) > 0 {
 		dst.Logging.Loki = src.Logging.Loki
+	}
+	if src.DSL.AllowIfBlocks != nil {
+		dst.DSL.AllowIfBlocks = src.DSL.AllowIfBlocks
+	}
+	if len(src.DSL.Helpers) > 0 {
+		dst.DSL.Helpers = append(dst.DSL.Helpers, src.DSL.Helpers...)
 	}
 	if src.Policies != (GlobalPolicies{}) {
 		dst.Policies = src.Policies
