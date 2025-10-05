@@ -44,7 +44,13 @@ func newCellStore(cfgs []config.CellConfig) (*cellStore, error) {
 		if cfg.Type == "" {
 			return nil, fmt.Errorf("cell %s missing type", cfg.ID)
 		}
-		store.cells[cfg.ID] = &cell{cfg: cfg, valid: false}
+		c := &cell{cfg: cfg, valid: false}
+		if cfg.Constant != nil {
+			if err := c.setValue(cfg.Constant, time.Time{}); err != nil {
+				return nil, fmt.Errorf("cell %s constant: %w", cfg.ID, err)
+			}
+		}
+		store.cells[cfg.ID] = c
 	}
 	return store, nil
 }

@@ -323,6 +323,12 @@ func (s *modbusServer) trackConn(conn net.Conn) {
 	if conn == nil {
 		return
 	}
+	select {
+	case <-s.stopCh:
+		_ = conn.Close()
+		return
+	default:
+	}
 	s.connsMu.Lock()
 	s.conns[conn] = struct{}{}
 	s.connsMu.Unlock()

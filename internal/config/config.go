@@ -64,12 +64,13 @@ type EndpointConfig struct {
 
 // CellConfig configures a local memory cell.
 type CellConfig struct {
-	ID       string    `yaml:"id"`
-	Type     ValueKind `yaml:"type"`
-	Unit     string    `yaml:"unit,omitempty"`
-	TTL      Duration  `yaml:"ttl,omitempty"`
-	Scale    float64   `yaml:"scale,omitempty"`
-	Metadata yaml.Node `yaml:"metadata,omitempty"`
+	ID       string      `yaml:"id"`
+	Type     ValueKind   `yaml:"type"`
+	Unit     string      `yaml:"unit,omitempty"`
+	TTL      Duration    `yaml:"ttl,omitempty"`
+	Scale    float64     `yaml:"scale,omitempty"`
+	Constant interface{} `yaml:"constant,omitempty"`
+	Metadata yaml.Node   `yaml:"metadata,omitempty"`
 }
 
 // ReadSignalConfig maps a portion of a Modbus read block into a cell.

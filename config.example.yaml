@@ -24,6 +24,7 @@ cells:
     unit: "°C"
   - id: heater_enabled
     type: bool
+    constant: false
   - id: heater_command
     type: bool
 reads:

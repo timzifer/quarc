@@ -1,0 +1,40 @@
+package service
+
+import (
+	"testing"
+
+	"modbus_processor/internal/config"
+)
+
+func TestNewCellStoreConstantValue(t *testing.T) {
+	store, err := newCellStore([]config.CellConfig{{
+		ID:       "const_number",
+		Type:     config.ValueKindNumber,
+		Constant: 42,
+	}})
+	if err != nil {
+		t.Fatalf("newCellStore: %v", err)
+	}
+
+	cell, err := store.mustGet("const_number")
+	if err != nil {
+		t.Fatalf("mustGet: %v", err)
+	}
+	if !cell.valid {
+		t.Fatalf("expected constant cell to be valid")
+	}
+	if got, ok := cell.value.(float64); !ok || got != 42 {
+		t.Fatalf("expected constant value 42, got %v", cell.value)
+	}
+}
+
+func TestNewCellStoreConstantTypeMismatch(t *testing.T) {
+	_, err := newCellStore([]config.CellConfig{{
+		ID:       "const_invalid",
+		Type:     config.ValueKindBool,
+		Constant: "nope",
+	}})
+	if err == nil {
+		t.Fatalf("expected error for mismatched constant type")
+	}
+}
