@@ -13,7 +13,7 @@ helpers:
       } else if temperature_c > 100 {
         fail("helper.temperature", "too hot")
       } else {
-        temperature_c * 0.001
+        success(temperature_c * 0.001)
       }
 cells:
   - id: raw_temperature

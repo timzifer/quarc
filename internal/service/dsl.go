@@ -1,11 +1,13 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/vm"
+	"github.com/rs/zerolog"
 
 	"modbus_processor/internal/config"
 )
@@ -14,18 +16,21 @@ type dslEngine struct {
 	allowIfBlocks bool
 	helpers       map[string]*helperFunction
 	functions     map[string]func(...interface{}) interface{}
+	logger        zerolog.Logger
 }
 
 type helperFunction struct {
-	name      string
-	arguments []string
-	program   *vm.Program
+	name       string
+	arguments  []string
+	program    *vm.Program
+	expression string
 }
 
-func newDSLEngine(cfg config.DSLConfig, helpers []config.HelperFunctionConfig) (*dslEngine, error) {
+func newDSLEngine(cfg config.DSLConfig, helpers []config.HelperFunctionConfig, logger zerolog.Logger) (*dslEngine, error) {
 	engine := &dslEngine{
 		helpers:   make(map[string]*helperFunction),
 		functions: make(map[string]func(...interface{}) interface{}),
+		logger:    logger.With().Str("component", "dsl").Logger(),
 	}
 	if cfg.AllowIfBlocks != nil {
 		engine.allowIfBlocks = *cfg.AllowIfBlocks
@@ -88,7 +93,7 @@ func (e *dslEngine) buildHelper(cfg config.HelperFunctionConfig) (*helperFunctio
 	if err != nil {
 		return nil, fmt.Errorf("helper %s: compile: %w", name, err)
 	}
-	return &helperFunction{name: name, arguments: args, program: program}, nil
+	return &helperFunction{name: name, arguments: args, program: program, expression: expression}, nil
 }
 
 func (e *dslEngine) preprocess(input string) (string, error) {
@@ -150,25 +155,36 @@ func (h *helperFunction) invoke(engine *dslEngine, args ...interface{}) (interfa
 	if len(args) != len(h.arguments) {
 		return nil, fmt.Errorf("helper %s expects %d arguments but got %d", h.name, len(h.arguments), len(args))
 	}
-	env := make(map[string]interface{}, len(args)+len(engine.functions)+1)
+	helperLogger := engine.logger.With().
+		Str("helper", h.name).
+		Logger()
+	ctx := &dslContext{
+		logger:         &helperLogger,
+		originKind:     "helper",
+		originID:       h.name,
+		expression:     h.expression,
+		expressionKind: "helper",
+	}
+	env := make(map[string]interface{}, len(args)+len(engine.functions)+4)
 	for idx, name := range h.arguments {
 		env[name] = args[idx]
 	}
-	env["fail"] = helperFail
+	env["success"] = ctx.success
+	env["fail"] = ctx.fail
+	env["log"] = ctx.log
+	env["dump"] = ctx.dump
 	for name, fn := range engine.functions {
 		env[name] = fn
 	}
-	result, err := vm.Run(h.program, env)
+	_, err := vm.Run(h.program, env)
 	if err != nil {
+		var success successSignal
+		if errors.As(err, &success) {
+			return success.value, nil
+		}
 		return nil, err
 	}
-	return result, nil
-}
-
-func helperFail(args ...interface{}) interface{} {
-	var ctx dslContext
-	ctx.fail(args...)
-	return nil
+	return nil, fmt.Errorf("helper %s: expression completed without success()", h.name)
 }
 
 func isValidIdentifier(name string) bool {

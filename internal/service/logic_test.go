@@ -5,11 +5,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"modbus_processor/internal/config"
 )
 
 func TestPrepareLogicBlockAutoDependencies(t *testing.T) {
-	dsl, err := newDSLEngine(config.DSLConfig{}, nil)
+	dsl, err := newDSLEngine(config.DSLConfig{}, nil, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("newDSLEngine: %v", err)
 	}
@@ -55,7 +57,7 @@ func TestPrepareLogicBlockAutoDependencies(t *testing.T) {
 }
 
 func TestPrepareLogicBlockIgnoresLocalVariables(t *testing.T) {
-	dsl, err := newDSLEngine(config.DSLConfig{}, nil)
+	dsl, err := newDSLEngine(config.DSLConfig{}, nil, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("newDSLEngine: %v", err)
 	}
@@ -92,7 +94,7 @@ success(flow_sensor_current - (0.8 * 1) + 0.8)
 }
 
 func TestPrepareLogicBlockMissingFallbackDependency(t *testing.T) {
-	dsl, err := newDSLEngine(config.DSLConfig{}, nil)
+	dsl, err := newDSLEngine(config.DSLConfig{}, nil, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("newDSLEngine: %v", err)
 	}
@@ -133,10 +135,10 @@ func TestHelperFunctionUsage(t *testing.T) {
 } else if temperature > 100 {
         fail("helper.temperature", "too hot")
 } else {
-        temperature * 0.001
+        success(temperature * 0.001)
 }`,
 		},
-	})
+	}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("newDSLEngine: %v", err)
 	}
@@ -174,7 +176,7 @@ func TestHelperFunctionUsage(t *testing.T) {
 		t.Fatalf("setValue: %v", err)
 	}
 	snapshot := cells.snapshot()
-	result := block.runProgram(now, snapshot, block.normal, false)
+	result := block.runProgram(now, snapshot, block.normal, false, cfg.Normal, "normal")
 	if !result.success {
 		t.Fatalf("expected success, got %+v", result)
 	}
@@ -186,7 +188,7 @@ func TestHelperFunctionUsage(t *testing.T) {
 		t.Fatalf("setValue: %v", err)
 	}
 	snapshot = cells.snapshot()
-	failure := block.runProgram(now, snapshot, block.normal, false)
+	failure := block.runProgram(now, snapshot, block.normal, false, cfg.Normal, "normal")
 	if failure.success {
 		t.Fatalf("expected failure result, got success")
 	}

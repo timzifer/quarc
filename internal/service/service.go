@@ -44,7 +44,7 @@ func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory
 	if factory == nil {
 		factory = remote.NewTCPClientFactory()
 	}
-	dsl, err := newDSLEngine(cfg.DSL, cfg.Helpers)
+	dsl, err := newDSLEngine(cfg.DSL, cfg.Helpers, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +94,7 @@ func Validate(cfg *config.Config, logger zerolog.Logger) error {
 		return errors.New("config must not be nil")
 	}
 
-	dsl, err := newDSLEngine(cfg.DSL, cfg.Helpers)
+	dsl, err := newDSLEngine(cfg.DSL, cfg.Helpers, logger)
 	if err != nil {
 		return err
 	}
