@@ -32,7 +32,7 @@ func AnalyzeLogic(cfg *config.Config) ([]LogicBlockReport, error) {
 		return nil, fmt.Errorf("config must not be nil")
 	}
 
-	dsl, err := newDSLEngine(cfg.DSL)
+	dsl, err := newDSLEngine(cfg.DSL, cfg.Helpers)
 	if err != nil {
 		return nil, err
 	}

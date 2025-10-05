@@ -10,6 +10,14 @@ func convertIfBlocks(input string) (string, error) {
 	var builder strings.Builder
 	for idx := 0; idx < len(input); {
 		ch := input[idx]
+		if next, ok, err := consumeComment(input, idx); ok {
+			if err != nil {
+				return "", err
+			}
+			builder.WriteString(input[idx:next])
+			idx = next
+			continue
+		}
 		switch ch {
 		case '"', '\'', '`':
 			end, err := scanStringLiteral(input, idx)
@@ -36,12 +44,18 @@ func convertIfBlocks(input string) (string, error) {
 }
 
 func parseIfBlock(input string, start int) (string, int, error) {
-	idx := skipWhitespace(input, start)
+	idx, err := skipWhitespace(input, start)
+	if err != nil {
+		return "", start, err
+	}
 	if !strings.HasPrefix(input[idx:], "if") || !isWordBoundary(input, idx+2) {
 		return "", start, fmt.Errorf("expected if keyword")
 	}
 	idx += 2
-	idx = skipWhitespace(input, idx)
+	idx, err = skipWhitespace(input, idx)
+	if err != nil {
+		return "", start, err
+	}
 	condStart := idx
 	braceIdx, err := findNextBrace(input, idx)
 	if err != nil {
@@ -57,34 +71,37 @@ func parseIfBlock(input string, start int) (string, int, error) {
 		return "", start, err
 	}
 	thenBody := strings.TrimSpace(input[blockStart+1 : blockEnd])
-	next := skipWhitespace(input, blockEnd+1)
+	next, err := skipWhitespace(input, blockEnd+1)
+	if err != nil {
+		return "", start, err
+	}
 	if next >= len(input) || !strings.HasPrefix(input[next:], "else") || !isWordBoundary(input, next+4) {
 		return "", start, fmt.Errorf("if expression must include an else block")
 	}
 	next += 4
-	next = skipWhitespace(input, next)
+	next, err = skipWhitespace(input, next)
+	if err != nil {
+		return "", start, err
+	}
 
 	var elseExpr string
 	switch {
 	case strings.HasPrefix(input[next:], "if") && isWordBoundary(input, next+2):
-		var elseConverted string
-		var err error
-		elseConverted, next, err = parseIfBlock(input, next)
+		elseExpr, next, err = parseIfBlock(input, next)
 		if err != nil {
 			return "", start, err
 		}
-		elseExpr = elseConverted
 	case next < len(input) && input[next] == '{':
 		elseEnd, err := scanBalancedBraces(input, next)
 		if err != nil {
 			return "", start, err
 		}
 		elseBody := strings.TrimSpace(input[next+1 : elseEnd])
-		convertedElse, err := convertIfBlocks(elseBody)
+		elseExpr, err = convertIfBlocks(elseBody)
 		if err != nil {
 			return "", start, err
 		}
-		elseExpr = fmt.Sprintf("(%s)", convertedElse)
+		elseExpr = fmt.Sprintf("(%s)", elseExpr)
 		next = elseEnd + 1
 	default:
 		return "", start, fmt.Errorf("else block must be followed by another if or a block")
@@ -105,6 +122,13 @@ func scanBalancedBraces(input string, start int) (int, error) {
 	depth := 0
 	for idx := start; idx < len(input); idx++ {
 		ch := input[idx]
+		if next, ok, err := consumeComment(input, idx); ok {
+			if err != nil {
+				return 0, err
+			}
+			idx = next - 1
+			continue
+		}
 		switch ch {
 		case '"', '\'', '`':
 			end, err := scanStringLiteral(input, idx)
@@ -155,6 +179,13 @@ func findNextBrace(input string, start int) (int, error) {
 	depth := 0
 	for idx := start; idx < len(input); idx++ {
 		ch := input[idx]
+		if next, ok, err := consumeComment(input, idx); ok {
+			if err != nil {
+				return 0, err
+			}
+			idx = next - 1
+			continue
+		}
 		switch ch {
 		case '"', '\'', '`':
 			end, err := scanStringLiteral(input, idx)
@@ -178,15 +209,22 @@ func findNextBrace(input string, start int) (int, error) {
 	return 0, fmt.Errorf("missing '{' after if condition")
 }
 
-func skipWhitespace(input string, start int) int {
+func skipWhitespace(input string, start int) (int, error) {
 	idx := start
 	for idx < len(input) {
+		if next, ok, err := consumeComment(input, idx); ok {
+			if err != nil {
+				return 0, err
+			}
+			idx = next
+			continue
+		}
 		if !unicode.IsSpace(rune(input[idx])) {
 			break
 		}
 		idx++
 	}
-	return idx
+	return idx, nil
 }
 
 func isWordBoundary(input string, idx int) bool {
@@ -211,4 +249,37 @@ func isIfKeyword(input string, idx int) bool {
 		return true
 	}
 	return false
+}
+
+func consumeComment(input string, idx int) (int, bool, error) {
+	if idx >= len(input) {
+		return idx, false, nil
+	}
+	if input[idx] == '/' && idx+1 < len(input) {
+		switch input[idx+1] {
+		case '/':
+			end := idx + 2
+			for end < len(input) && input[end] != '\n' {
+				end++
+			}
+			return end, true, nil
+		case '*':
+			end := idx + 2
+			for end+1 < len(input) {
+				if input[end] == '*' && input[end+1] == '/' {
+					return end + 2, true, nil
+				}
+				end++
+			}
+			return 0, true, fmt.Errorf("unterminated block comment")
+		}
+	}
+	if input[idx] == '#' {
+		end := idx + 1
+		for end < len(input) && input[end] != '\n' {
+			end++
+		}
+		return end, true, nil
+	}
+	return idx, false, nil
 }
