@@ -44,6 +44,10 @@ func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory
 	if factory == nil {
 		factory = remote.NewTCPClientFactory()
 	}
+	dsl, err := newDSLEngine(cfg.DSL)
+	if err != nil {
+		return nil, err
+	}
 	cells, err := newCellStore(cfg.Cells)
 	if err != nil {
 		return nil, err
@@ -52,7 +56,7 @@ func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory
 	if err != nil {
 		return nil, err
 	}
-	logic, ordered, err := newLogicBlocks(cfg.Logic, cells, logger)
+	logic, ordered, err := newLogicBlocks(cfg.Logic, cells, dsl, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -90,6 +94,10 @@ func Validate(cfg *config.Config, logger zerolog.Logger) error {
 		return errors.New("config must not be nil")
 	}
 
+	dsl, err := newDSLEngine(cfg.DSL)
+	if err != nil {
+		return err
+	}
 	cells, err := newCellStore(cfg.Cells)
 	if err != nil {
 		return err
@@ -97,7 +105,7 @@ func Validate(cfg *config.Config, logger zerolog.Logger) error {
 	if _, err := newReadGroups(cfg.Reads, cells); err != nil {
 		return err
 	}
-	if _, _, err := newLogicBlocks(cfg.Logic, cells, logger); err != nil {
+	if _, _, err := newLogicBlocks(cfg.Logic, cells, dsl, logger); err != nil {
 		return err
 	}
 	if _, err := newWriteTargets(cfg.Writes, cells); err != nil {
