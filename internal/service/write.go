@@ -64,7 +64,8 @@ func (t *writeTarget) commit(now time.Time, factory remote.ClientFactory, logger
 	if t.cell == nil {
 		return 0
 	}
-	if !t.cell.valid {
+	current, valid := t.cell.currentValue()
+	if !valid {
 		logger.Trace().Str("target", t.cfg.ID).Msg("skipping invalid cell")
 		return 0
 	}
@@ -76,7 +77,6 @@ func (t *writeTarget) commit(now time.Time, factory remote.ClientFactory, logger
 		}
 	}
 
-	current := t.cell.value
 	if !t.shouldWrite(current) {
 		logger.Trace().Str("target", t.cfg.ID).Msg("no significant change detected")
 		return 0
@@ -87,11 +87,13 @@ func (t *writeTarget) commit(now time.Time, factory remote.ClientFactory, logger
 	}
 	client, err := t.ensureClient(factory)
 	if err != nil {
+		t.closeClient()
 		logger.Error().Err(err).Str("target", t.cfg.ID).Msg("write client unavailable")
 		return 1
 	}
 
 	if err := t.performWrite(client, current); err != nil {
+		t.closeClient()
 		logger.Error().Err(err).Str("target", t.cfg.ID).Msg("modbus write failed")
 		return 1
 	}
@@ -187,4 +189,12 @@ func (t *writeTarget) performWrite(client remote.Client, value interface{}) erro
 	default:
 		return fmt.Errorf("unsupported write function %q", t.cfg.Function)
 	}
+}
+
+func (t *writeTarget) closeClient() {
+	if t.client == nil {
+		return
+	}
+	_ = t.client.Close()
+	t.client = nil
 }

@@ -11,6 +11,16 @@ A deterministic, cyclic Modbus controller that executes three strictly separated
 
 The cycle duration is monotonic (default `500ms` if unspecified). Metrics record last cycle duration, counts of read/eval/write errors and total cycles executed.
 
+### Runtime overrides
+
+Besides deterministic scheduling, the service exposes helper methods that make the controller easier to embed into a supervisory application:
+
+* `SetCellValue(id, value)` – manually override a cell with type-checked data. The Modbus server is refreshed immediately so connected HMIs or SCADA clients see the change without waiting for the next cycle.
+* `InvalidateCell(id, code, message)` – mark a cell invalid while attaching a diagnostic entry that is exported to logic blocks and snapshots.
+* `InspectCell(id)` – obtain a structured view of the current value, validity, diagnostic metadata and last update timestamp.
+
+These helpers allow HMIs to implement “force” functionality or provide manual fallback values during commissioning, mirroring typical features of a soft PLC.
+
 ## Expression DSL
 
 Expressions are compiled with [`expr`](https://github.com/expr-lang/expr). The following helpers are available:

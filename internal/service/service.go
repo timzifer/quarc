@@ -194,6 +194,15 @@ func (s *Service) Metrics() metrics {
 
 // Close releases all background resources held by the service.
 func (s *Service) Close() error {
+	if s == nil {
+		return nil
+	}
+	for _, group := range s.reads {
+		group.closeClient()
+	}
+	for _, target := range s.writes {
+		target.closeClient()
+	}
 	if s.server != nil {
 		s.server.close()
 	}
@@ -206,4 +215,48 @@ func (s *Service) ServerAddress() string {
 		return ""
 	}
 	return s.server.addr()
+}
+
+// SetCellValue applies a manual override to the specified cell.
+func (s *Service) SetCellValue(id string, value interface{}) error {
+	if s == nil {
+		return errors.New("service is nil")
+	}
+	cell, err := s.cells.mustGet(id)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	if err := cell.setValue(value, now); err != nil {
+		return err
+	}
+	if s.server != nil {
+		s.server.refresh(s.cells.snapshot())
+	}
+	return nil
+}
+
+// InvalidateCell marks the specified cell invalid with an optional diagnostic code/message.
+func (s *Service) InvalidateCell(id, code, message string) error {
+	if s == nil {
+		return errors.New("service is nil")
+	}
+	cell, err := s.cells.mustGet(id)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	cell.markInvalid(now, code, message)
+	if s.server != nil {
+		s.server.refresh(s.cells.snapshot())
+	}
+	return nil
+}
+
+// InspectCell returns the current state of the requested cell.
+func (s *Service) InspectCell(id string) (CellState, error) {
+	if s == nil {
+		return CellState{}, errors.New("service is nil")
+	}
+	return s.cells.state(id)
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"modbus_processor/internal/config"
@@ -16,6 +17,7 @@ type diagnosis struct {
 
 type cell struct {
 	cfg    config.CellConfig
+	mu     sync.RWMutex
 	value  interface{}
 	valid  bool
 	diag   *diagnosis
@@ -28,7 +30,25 @@ type snapshotValue struct {
 	Kind  config.ValueKind
 }
 
+// CellDiagnosis is a public representation of a diagnostic entry associated with a cell.
+type CellDiagnosis struct {
+	Code      string
+	Message   string
+	Timestamp time.Time
+}
+
+// CellState exposes the current state of a cell for external inspection.
+type CellState struct {
+	ID        string
+	Kind      config.ValueKind
+	Value     interface{}
+	Valid     bool
+	Diagnosis *CellDiagnosis
+	UpdatedAt time.Time
+}
+
 type cellStore struct {
+	mu    sync.RWMutex
 	cells map[string]*cell
 }
 
@@ -59,7 +79,9 @@ func (s *cellStore) mustGet(id string) (*cell, error) {
 	if id == "" {
 		return nil, fmt.Errorf("cell id must not be empty")
 	}
+	s.mu.RLock()
 	c, ok := s.cells[id]
+	s.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("unknown cell %q", id)
 	}
@@ -67,9 +89,11 @@ func (s *cellStore) mustGet(id string) (*cell, error) {
 }
 
 func (s *cellStore) snapshot() map[string]*snapshotValue {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	snap := make(map[string]*snapshotValue, len(s.cells))
 	for id, c := range s.cells {
-		snap[id] = &snapshotValue{Value: cloneValue(c.value), Valid: c.valid, Kind: c.cfg.Type}
+		snap[id] = c.asSnapshotValue()
 	}
 	return snap
 }
@@ -79,21 +103,27 @@ func (c *cell) setValue(value interface{}, ts time.Time) error {
 	if err != nil {
 		return err
 	}
+	c.mu.Lock()
 	c.value = converted
 	c.valid = true
 	c.diag = nil
 	c.update = ts
+	c.mu.Unlock()
 	return nil
 }
 
 func (c *cell) markInvalid(ts time.Time, code, message string) {
+	c.mu.Lock()
 	c.value = nil
 	c.valid = false
 	c.diag = &diagnosis{Code: code, Message: message, Timestamp: ts}
 	c.update = ts
+	c.mu.Unlock()
 }
 
 func (c *cell) asSnapshotValue() *snapshotValue {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return &snapshotValue{Value: cloneValue(c.value), Valid: c.valid, Kind: c.cfg.Type}
 }
 
@@ -104,6 +134,16 @@ func convertValue(kind config.ValueKind, value interface{}) (interface{}, error)
 		case bool:
 			return v, nil
 		case int:
+			return v != 0, nil
+		case int8:
+			return v != 0, nil
+		case int16:
+			return v != 0, nil
+		case int32:
+			return v != 0, nil
+		case int64:
+			return v != 0, nil
+		case uint8:
 			return v != 0, nil
 		case float64:
 			return v != 0, nil
@@ -121,11 +161,21 @@ func convertValue(kind config.ValueKind, value interface{}) (interface{}, error)
 			return float64(v), nil
 		case int:
 			return float64(v), nil
+		case int8:
+			return float64(v), nil
+		case int16:
+			return float64(v), nil
+		case int32:
+			return float64(v), nil
 		case int64:
 			return float64(v), nil
 		case uint16:
 			return float64(v), nil
+		case uint8:
+			return float64(v), nil
 		case uint32:
+			return float64(v), nil
+		case uint64:
 			return float64(v), nil
 		case bool:
 			if v {
@@ -157,9 +207,45 @@ func cloneValue(value interface{}) interface{} {
 }
 
 func (s *cellStore) ids() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	out := make([]string, 0, len(s.cells))
 	for id := range s.cells {
 		out = append(out, id)
 	}
 	return out
+}
+
+func (c *cell) currentValue() (interface{}, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !c.valid {
+		return nil, false
+	}
+	return cloneValue(c.value), true
+}
+
+func (c *cell) state() CellState {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var diag *CellDiagnosis
+	if c.diag != nil {
+		diag = &CellDiagnosis{Code: c.diag.Code, Message: c.diag.Message, Timestamp: c.diag.Timestamp}
+	}
+	return CellState{
+		ID:        c.cfg.ID,
+		Kind:      c.cfg.Type,
+		Value:     cloneValue(c.value),
+		Valid:     c.valid,
+		Diagnosis: diag,
+		UpdatedAt: c.update,
+	}
+}
+
+func (s *cellStore) state(id string) (CellState, error) {
+	cell, err := s.mustGet(id)
+	if err != nil {
+		return CellState{}, err
+	}
+	return cell.state(), nil
 }
