@@ -52,7 +52,7 @@ func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory
 	if err != nil {
 		return nil, err
 	}
-	logic, ordered, err := newLogicBlocks(cfg.Logic, cells)
+	logic, ordered, err := newLogicBlocks(cfg.Logic, cells, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -82,6 +82,33 @@ func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory
 		cycle:         cfg.CycleInterval(),
 	}
 	return svc, nil
+}
+
+// Validate performs a dry-run validation of the configuration without starting background services.
+func Validate(cfg *config.Config, logger zerolog.Logger) error {
+	if cfg == nil {
+		return errors.New("config must not be nil")
+	}
+
+	cells, err := newCellStore(cfg.Cells)
+	if err != nil {
+		return err
+	}
+	if _, err := newReadGroups(cfg.Reads, cells); err != nil {
+		return err
+	}
+	if _, _, err := newLogicBlocks(cfg.Logic, cells, logger); err != nil {
+		return err
+	}
+	if _, err := newWriteTargets(cfg.Writes, cells); err != nil {
+		return err
+	}
+	if cfg.Server.Enabled {
+		if _, _, err := prepareServer(cfg.Server, cells); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Run executes the controller loop until the context is cancelled.
