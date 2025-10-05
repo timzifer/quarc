@@ -22,7 +22,7 @@ type helperFunction struct {
 	program   *vm.Program
 }
 
-func newDSLEngine(cfg config.DSLConfig) (*dslEngine, error) {
+func newDSLEngine(cfg config.DSLConfig, helpers []config.HelperFunctionConfig) (*dslEngine, error) {
 	engine := &dslEngine{
 		helpers:   make(map[string]*helperFunction),
 		functions: make(map[string]func(...interface{}) interface{}),
@@ -31,8 +31,12 @@ func newDSLEngine(cfg config.DSLConfig) (*dslEngine, error) {
 		engine.allowIfBlocks = *cfg.AllowIfBlocks
 	}
 
-	if len(cfg.Helpers) > 0 {
-		for _, helperCfg := range cfg.Helpers {
+	helperCfgs := make([]config.HelperFunctionConfig, 0, len(helpers)+len(cfg.Helpers))
+	helperCfgs = append(helperCfgs, helpers...)
+	helperCfgs = append(helperCfgs, cfg.Helpers...)
+
+	if len(helperCfgs) > 0 {
+		for _, helperCfg := range helperCfgs {
 			helper, err := engine.buildHelper(helperCfg)
 			if err != nil {
 				return nil, err

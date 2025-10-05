@@ -36,3 +36,37 @@ func TestConvertIfBlocksStringLiterals(t *testing.T) {
 		t.Fatalf("converted expression mismatch:\n got: %s\nwant: %s", converted, expected)
 	}
 }
+
+func TestConvertIfBlocksIgnoresComments(t *testing.T) {
+	input := `if enabled {
+                // if this comment mentions if it should be ignored
+                success(1)
+        } else {
+                success(2) # else if comment at end
+        }`
+	converted, err := convertIfBlocks(input)
+	if err != nil {
+		t.Fatalf("convertIfBlocks: %v", err)
+	}
+	expected := `((enabled) ? (// if this comment mentions if it should be ignored
+                success(1)) : (success(2) # else if comment at end))`
+	if converted != expected {
+		t.Fatalf("converted expression mismatch:\n got: %s\nwant: %s", converted, expected)
+	}
+}
+
+func TestConvertIfBlocksAllowsCommentBetweenBlocks(t *testing.T) {
+	input := `if condition {
+                success(1)
+        } /* if in block comment */ else {
+                success(0)
+        }`
+	converted, err := convertIfBlocks(input)
+	if err != nil {
+		t.Fatalf("convertIfBlocks: %v", err)
+	}
+	expected := `((condition) ? (success(1)) : (success(0)))`
+	if converted != expected {
+		t.Fatalf("converted expression mismatch:\n got: %s\nwant: %s", converted, expected)
+	}
+}

@@ -4,17 +4,17 @@ logging:
   format: text
 dsl:
   allow_if_blocks: true
-  helpers:
-    - name: water_viscosity
-      arguments: [temperature_c]
-      expression: |
-        if temperature_c < 0 {
-          fail("helper.temperature", "below freezing")
-        } else if temperature_c > 100 {
-          fail("helper.temperature", "too hot")
-        } else {
-          temperature_c * 0.001
-        }
+helpers:
+  - name: water_viscosity
+    arguments: [temperature_c]
+    expression: |
+      if temperature_c < 0 {
+        fail("helper.temperature", "below freezing")
+      } else if temperature_c > 100 {
+        fail("helper.temperature", "too hot")
+      } else {
+        temperature_c * 0.001
+      }
 cells:
   - id: raw_temperature
     type: number

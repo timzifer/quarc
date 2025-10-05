@@ -178,16 +178,17 @@ type ServerConfig struct {
 
 // Config is the root configuration structure for the service.
 type Config struct {
-	Cycle    Duration            `yaml:"cycle"`
-	Logging  LoggingConfig       `yaml:"logging"`
-	Modules  []string            `yaml:"modules"`
-	Cells    []CellConfig        `yaml:"cells"`
-	Reads    []ReadGroupConfig   `yaml:"reads"`
-	Writes   []WriteTargetConfig `yaml:"writes"`
-	Logic    []LogicBlockConfig  `yaml:"logic"`
-	DSL      DSLConfig           `yaml:"dsl"`
-	Policies GlobalPolicies      `yaml:"policies"`
-	Server   ServerConfig        `yaml:"server"`
+	Cycle    Duration               `yaml:"cycle"`
+	Logging  LoggingConfig          `yaml:"logging"`
+	Modules  []string               `yaml:"modules"`
+	Cells    []CellConfig           `yaml:"cells"`
+	Reads    []ReadGroupConfig      `yaml:"reads"`
+	Writes   []WriteTargetConfig    `yaml:"writes"`
+	Logic    []LogicBlockConfig     `yaml:"logic"`
+	DSL      DSLConfig              `yaml:"dsl"`
+	Helpers  []HelperFunctionConfig `yaml:"helpers,omitempty"`
+	Policies GlobalPolicies         `yaml:"policies"`
+	Server   ServerConfig           `yaml:"server"`
 }
 
 // Load reads and decodes the configuration file from disk.
@@ -318,6 +319,9 @@ func mergeConfig(dst, src *Config) {
 	}
 	if len(src.DSL.Helpers) > 0 {
 		dst.DSL.Helpers = append(dst.DSL.Helpers, src.DSL.Helpers...)
+	}
+	if len(src.Helpers) > 0 {
+		dst.Helpers = append(dst.Helpers, src.Helpers...)
 	}
 	if src.Policies != (GlobalPolicies{}) {
 		dst.Policies = src.Policies

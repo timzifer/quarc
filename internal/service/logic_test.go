@@ -9,7 +9,7 @@ import (
 )
 
 func TestPrepareLogicBlockAutoDependencies(t *testing.T) {
-	dsl, err := newDSLEngine(config.DSLConfig{})
+	dsl, err := newDSLEngine(config.DSLConfig{}, nil)
 	if err != nil {
 		t.Fatalf("newDSLEngine: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestPrepareLogicBlockAutoDependencies(t *testing.T) {
 }
 
 func TestPrepareLogicBlockIgnoresLocalVariables(t *testing.T) {
-	dsl, err := newDSLEngine(config.DSLConfig{})
+	dsl, err := newDSLEngine(config.DSLConfig{}, nil)
 	if err != nil {
 		t.Fatalf("newDSLEngine: %v", err)
 	}
@@ -92,7 +92,7 @@ success(flow_sensor_current - (0.8 * 1) + 0.8)
 }
 
 func TestPrepareLogicBlockMissingFallbackDependency(t *testing.T) {
-	dsl, err := newDSLEngine(config.DSLConfig{})
+	dsl, err := newDSLEngine(config.DSLConfig{}, nil)
 	if err != nil {
 		t.Fatalf("newDSLEngine: %v", err)
 	}
@@ -124,18 +124,17 @@ func TestHelperFunctionUsage(t *testing.T) {
 	allowIf := true
 	dsl, err := newDSLEngine(config.DSLConfig{
 		AllowIfBlocks: &allowIf,
-		Helpers: []config.HelperFunctionConfig{
-			{
-				Name:      "water_viscosity",
-				Arguments: []string{"temperature"},
-				Expression: `if temperature < 0 {
+	}, []config.HelperFunctionConfig{
+		{
+			Name:      "water_viscosity",
+			Arguments: []string{"temperature"},
+			Expression: `if temperature < 0 {
         fail("helper.temperature", "below freezing")
 } else if temperature > 100 {
         fail("helper.temperature", "too hot")
 } else {
         temperature * 0.001
 }`,
-			},
 		},
 	})
 	if err != nil {
