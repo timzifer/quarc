@@ -49,3 +49,25 @@ func TestConvertStandaloneCallIgnoresHttpUrls(t *testing.T) {
 		t.Fatalf("expected URL to be preserved, got %q", converted)
 	}
 }
+
+func TestRewriteValidationValueCalls(t *testing.T) {
+	cases := map[string]string{
+		`value("a")`:                      `value_fn("a")`,
+		` value ( "b" ) `:                 ` value_fn ( "b" ) `,
+		`value/*comment*/(\"c\")`:         `value/*comment*/(\"c\")`,
+		`logger.value("d")`:               `logger.value("d")`,
+		`valueX("e")`:                     `valueX("e")`,
+		`"value(ignored)"`:                `"value(ignored)"`,
+		`// value("comment")`:             `// value("comment")`,
+		`value`:                           `value`,
+		`value + value("f")`:              `value + value_fn("f")`,
+		`let v = value("g"); log(value);`: `let v = value_fn("g"); log(value);`,
+	}
+
+	for input, want := range cases {
+		got := rewriteValidationValueCalls(input)
+		if got != want {
+			t.Fatalf("rewriteValidationValueCalls(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
