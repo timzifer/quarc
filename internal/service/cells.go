@@ -11,7 +11,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"modbus_processor/internal/config"
-	serviceio "modbus_processor/internal/service/io"
+	serviceio "modbus_processor/serviceio"
 )
 
 type diagnosis struct {

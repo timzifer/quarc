@@ -13,9 +13,9 @@ import (
 	"github.com/rs/zerolog"
 
 	"modbus_processor/internal/config"
-	"modbus_processor/internal/remote"
-	serviceio "modbus_processor/internal/service/io"
 	"modbus_processor/internal/service/modbus"
+	"modbus_processor/remote"
+	serviceio "modbus_processor/serviceio"
 )
 
 // Service implements the deterministic three-phase controller.
