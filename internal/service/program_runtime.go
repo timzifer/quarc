@@ -170,11 +170,11 @@ func (b *programBinding) invalidateOutputs(now time.Time, err error) {
 
 func (s *Service) delta(now time.Time) time.Duration {
 	if s.lastCycleTime.IsZero() {
-		return s.cycle
+		return s.cycleInterval()
 	}
 	delta := now.Sub(s.lastCycleTime)
 	if delta <= 0 {
-		return s.cycle
+		return s.cycleInterval()
 	}
 	return delta
 }
