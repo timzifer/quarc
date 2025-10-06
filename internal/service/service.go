@@ -3,6 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,6 +37,7 @@ type Service struct {
 	controller *cycleController
 	cycle      atomic.Int64
 	liveView   *liveViewServer
+	load       systemLoad
 }
 
 type metrics struct {
@@ -50,6 +54,58 @@ type workerSlots struct {
 	program int
 	execute int
 	write   int
+}
+
+type workerLoad struct {
+	kind       string
+	configured int
+	active     atomic.Int64
+}
+
+type systemLoad struct {
+	read    workerLoad
+	program workerLoad
+	execute workerLoad
+	write   workerLoad
+}
+
+type workerLoadSnapshot struct {
+	Kind       string
+	Configured int
+	Active     int
+}
+
+type systemLoadSnapshot struct {
+	Workers    []workerLoadSnapshot
+	Goroutines int
+}
+
+type readGroupStatus struct {
+	ID           string
+	Function     string
+	Start        uint16
+	Length       uint16
+	Disabled     bool
+	NextRun      time.Time
+	LastRun      time.Time
+	LastDuration time.Duration
+}
+
+type writeTargetStatus struct {
+	ID           string
+	Cell         string
+	Function     string
+	Address      uint16
+	Disabled     bool
+	LastWrite    time.Time
+	LastAttempt  time.Time
+	LastDuration time.Duration
+}
+
+type logicBlockState struct {
+	ID      string
+	Target  string
+	Metrics logicMetricsSnapshot
 }
 
 func newWorkerSlots(cfg config.WorkerSlots) workerSlots {
@@ -73,6 +129,41 @@ func (w workerSlots) readSlot() int    { return w.read }
 func (w workerSlots) programSlot() int { return w.program }
 func (w workerSlots) executeSlot() int { return w.execute }
 func (w workerSlots) writeSlot() int   { return w.write }
+
+func newSystemLoad(slots workerSlots) systemLoad {
+	load := systemLoad{
+		read:    workerLoad{kind: "read", configured: slots.readSlot()},
+		program: workerLoad{kind: "program", configured: slots.programSlot()},
+		execute: workerLoad{kind: "logic", configured: slots.executeSlot()},
+		write:   workerLoad{kind: "write", configured: slots.writeSlot()},
+	}
+	return load
+}
+
+func (w *workerLoad) snapshot() workerLoadSnapshot {
+	if w == nil {
+		return workerLoadSnapshot{}
+	}
+	return workerLoadSnapshot{
+		Kind:       w.kind,
+		Configured: w.configured,
+		Active:     int(w.active.Load()),
+	}
+}
+
+func (s systemLoad) snapshot() systemLoadSnapshot {
+	workers := []workerLoadSnapshot{
+		s.read.snapshot(),
+		s.program.snapshot(),
+		s.execute.snapshot(),
+		s.write.snapshot(),
+	}
+	sort.Slice(workers, func(i, j int) bool { return workers[i].Kind < workers[j].Kind })
+	return systemLoadSnapshot{
+		Workers:    workers,
+		Goroutines: runtime.NumGoroutine(),
+	}
+}
 
 // New builds a service from configuration and dependencies.
 func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory) (*Service, error) {
@@ -115,6 +206,7 @@ func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory
 		}
 	}
 
+	slots := newWorkerSlots(cfg.Workers)
 	svc := &Service{
 		cfg:           cfg,
 		logger:        logger,
@@ -125,8 +217,9 @@ func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory
 		ordered:       ordered,
 		writes:        writes,
 		server:        srv,
-		workers:       newWorkerSlots(cfg.Workers),
+		workers:       slots,
 	}
+	svc.load = newSystemLoad(slots)
 	svc.controller = newCycleController(cfg.CycleInterval())
 	svc.cycle.Store(int64(cfg.CycleInterval()))
 	if len(programs) > 0 {
@@ -220,7 +313,7 @@ func (s *Service) readPhase(now time.Time) int {
 		return 0
 	}
 	slots := s.workers.readSlot()
-	errors, _ := runWorkerPool(context.Background(), slots, due, func(_ context.Context, group *readGroup) int {
+	errors, _ := runWorkersWithLoad(context.Background(), &s.load.read, slots, due, func(_ context.Context, group *readGroup) int {
 		return group.perform(now, s.clientFactory, s.logger)
 	})
 	return errors
@@ -235,13 +328,25 @@ func (s *Service) commitPhase(ctx context.Context, now time.Time) int {
 		return 0
 	}
 	slots := s.workers.writeSlot()
-	errors, _ := runWorkerPool(ctx, slots, s.writes, func(c context.Context, target *writeTarget) int {
+	errors, _ := runWorkersWithLoad(ctx, &s.load.write, slots, s.writes, func(c context.Context, target *writeTarget) int {
 		if err := c.Err(); err != nil {
 			return 0
 		}
 		return target.commit(now, s.clientFactory, s.logger)
 	})
 	return errors
+}
+
+func runWorkersWithLoad[T any](ctx context.Context, load *workerLoad, slots int, items []T, fn func(context.Context, T) int) (int, bool) {
+	if load == nil {
+		return runWorkerPool(ctx, slots, items, fn)
+	}
+	wrapped := func(ctx context.Context, item T) int {
+		load.active.Add(1)
+		defer load.active.Add(-1)
+		return fn(ctx, item)
+	}
+	return runWorkerPool(ctx, slots, items, wrapped)
 }
 
 func (s *Service) evaluateLogic(now time.Time, snapshot map[string]*snapshotValue) int {
@@ -253,7 +358,10 @@ func (s *Service) evaluateLogic(now time.Time, snapshot map[string]*snapshotValu
 	if slots <= 1 {
 		errors := 0
 		for _, block := range s.ordered {
-			errors += block.evaluate(now, snapshot, nil, s.logger)
+			s.load.execute.active.Add(1)
+			errs := block.evaluate(now, snapshot, nil, s.logger)
+			s.load.execute.active.Add(-1)
+			errors += errs
 		}
 		return errors
 	}
@@ -268,10 +376,13 @@ func (s *Service) evaluateLogic(now time.Time, snapshot map[string]*snapshotValu
 	var wg sync.WaitGroup
 	var snapshotMu sync.RWMutex
 
+	executeLoad := &s.load.execute
 	worker := func() {
 		defer wg.Done()
 		for block := range tasks {
+			executeLoad.active.Add(1)
 			errs := block.evaluate(now, snapshot, &snapshotMu, s.logger)
+			executeLoad.active.Add(-1)
 			results <- logicResult{block: block, errors: errs}
 		}
 	}
@@ -327,6 +438,81 @@ func (s *Service) CellSnapshot() map[string]*snapshotValue {
 // Metrics returns the last recorded metrics snapshot.
 func (s *Service) Metrics() metrics {
 	return s.metrics
+}
+
+// UpdateCell applies a manual override to a cell when the controller is paused.
+func (s *Service) UpdateCell(id string, value interface{}, hasValue bool, quality *float64, qualitySet bool, valid *bool) (CellState, error) {
+	if s == nil {
+		return CellState{}, errors.New("service is nil")
+	}
+	if s.controller != nil {
+		status := s.controller.Status()
+		if status.Mode != controlModePause {
+			return CellState{}, errors.New("controller must be paused to edit cells")
+		}
+	}
+	update := manualCellUpdate{value: value, hasValue: hasValue, quality: quality, qualitySet: qualitySet, valid: valid}
+	return s.cells.updateManual(id, time.Now(), update)
+}
+
+// SetReadGroupDisabled toggles a read group at runtime.
+func (s *Service) SetReadGroupDisabled(id string, disabled bool) (readGroupStatus, error) {
+	for _, group := range s.reads {
+		if group.cfg.ID == id {
+			group.setDisabled(disabled)
+			return group.status(), nil
+		}
+	}
+	return readGroupStatus{}, fmt.Errorf("read group %s not found", id)
+}
+
+// SetWriteTargetDisabled toggles a write target at runtime.
+func (s *Service) SetWriteTargetDisabled(id string, disabled bool) (writeTargetStatus, error) {
+	for _, target := range s.writes {
+		if target.cfg.ID == id {
+			target.setDisabled(disabled)
+			return target.status(), nil
+		}
+	}
+	return writeTargetStatus{}, fmt.Errorf("write target %s not found", id)
+}
+
+// ReadStatuses returns a snapshot of configured read groups.
+func (s *Service) ReadStatuses() []readGroupStatus {
+	statuses := make([]readGroupStatus, 0, len(s.reads))
+	for _, group := range s.reads {
+		statuses = append(statuses, group.status())
+	}
+	sort.Slice(statuses, func(i, j int) bool { return statuses[i].ID < statuses[j].ID })
+	return statuses
+}
+
+// WriteStatuses returns a snapshot of configured write targets.
+func (s *Service) WriteStatuses() []writeTargetStatus {
+	statuses := make([]writeTargetStatus, 0, len(s.writes))
+	for _, target := range s.writes {
+		statuses = append(statuses, target.status())
+	}
+	sort.Slice(statuses, func(i, j int) bool { return statuses[i].ID < statuses[j].ID })
+	return statuses
+}
+
+// LogicStates returns runtime metrics for configured logic blocks.
+func (s *Service) LogicStates() []logicBlockState {
+	states := make([]logicBlockState, 0, len(s.logic))
+	for _, block := range s.logic {
+		states = append(states, logicBlockState{ID: block.cfg.ID, Target: block.cfg.Target, Metrics: block.metricsSnapshot()})
+	}
+	sort.Slice(states, func(i, j int) bool { return states[i].ID < states[j].ID })
+	return states
+}
+
+// SystemLoad returns a snapshot of current worker utilisation.
+func (s *Service) SystemLoad() systemLoadSnapshot {
+	if s == nil {
+		return systemLoadSnapshot{}
+	}
+	return s.load.snapshot()
 }
 
 func (s *Service) cycleInterval() time.Duration {

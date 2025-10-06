@@ -26,6 +26,14 @@ type cell struct {
 	update  time.Time
 }
 
+type manualCellUpdate struct {
+	value      interface{}
+	hasValue   bool
+	quality    *float64
+	qualitySet bool
+	valid      *bool
+}
+
 type snapshotValue struct {
 	Value   interface{}
 	Valid   bool
@@ -125,6 +133,43 @@ func (c *cell) markInvalid(ts time.Time, code, message string) {
 	c.diag = &diagnosis{Code: code, Message: message, Timestamp: ts}
 	c.update = ts
 	c.mu.Unlock()
+}
+
+func (c *cell) applyManualUpdate(ts time.Time, update manualCellUpdate) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if update.valid != nil && !*update.valid {
+		c.value = nil
+		c.valid = false
+		c.quality = nil
+		c.diag = nil
+		c.update = ts
+		return nil
+	}
+
+	if update.hasValue {
+		converted, err := convertValue(c.cfg.Type, update.value)
+		if err != nil {
+			return err
+		}
+		c.value = converted
+		c.valid = true
+		c.diag = nil
+	} else if update.valid != nil && *update.valid && !c.valid {
+		return fmt.Errorf("cell %s requires a value to mark it valid", c.cfg.ID)
+	}
+
+	if update.qualitySet {
+		c.quality = cloneQuality(update.quality)
+	} else if update.hasValue {
+		c.quality = cloneQuality(c.quality)
+	}
+
+	if update.hasValue || update.qualitySet || (update.valid != nil && *update.valid) {
+		c.update = ts
+	}
+	return nil
 }
 
 func (c *cell) asSnapshotValue() *snapshotValue {
@@ -260,6 +305,17 @@ func (c *cell) state() CellState {
 func (s *cellStore) state(id string) (CellState, error) {
 	cell, err := s.mustGet(id)
 	if err != nil {
+		return CellState{}, err
+	}
+	return cell.state(), nil
+}
+
+func (s *cellStore) updateManual(id string, ts time.Time, update manualCellUpdate) (CellState, error) {
+	cell, err := s.mustGet(id)
+	if err != nil {
+		return CellState{}, err
+	}
+	if err := cell.applyManualUpdate(ts, update); err != nil {
 		return CellState{}, err
 	}
 	return cell.state(), nil

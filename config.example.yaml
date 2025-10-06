@@ -30,6 +30,7 @@ reads:
     start: 0
     length: 1
     ttl: 1s
+    disable: false # optional, allows pausing this read group
     signals:
       - cell: raw_temperature
         offset: 0
@@ -45,6 +46,7 @@ writes:
     address: 5
     rate_limit: 2s
     priority: 10
+    disable: false # optional, allows pausing this write target
 logic:
   - id: convert_temperature
     target: temperature_c
