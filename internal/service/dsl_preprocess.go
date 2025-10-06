@@ -6,6 +6,13 @@ import (
 	"unicode"
 )
 
+// convertStandaloneCalls rewrites standalone dump/log statements into
+// assignments so that the DSL parser treats them as regular expressions.
+//
+// Without this rewrite the parser would reject calls like `log(value)` when
+// they appear on their own line because the grammar expects every statement
+// to yield a value. Wrapping the call into a dummy assignment keeps side
+// effects (logging) intact while satisfying the parser.
 func convertStandaloneCalls(input string) string {
 	if strings.TrimSpace(input) == "" {
 		return input
@@ -28,6 +35,9 @@ func convertStandaloneCalls(input string) string {
 	return builder.String()
 }
 
+// convertStandaloneCallLine attempts to rewrite a single line containing a
+// standalone log/dump call. The function preserves indentation and trailing
+// comments so the resulting statement keeps its original readability.
 func convertStandaloneCallLine(line string, counter int) (string, bool) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
@@ -134,6 +144,10 @@ func leadingWhitespace(input string) string {
 	return input
 }
 
+// rewriteValidationValueCalls replaces occurrences of `value(...)` with
+// `value_fn(...)` inside validation expressions. This avoids conflicts with
+// the helper that exposes the computed result of the parent expression while
+// leaving comments and string literals untouched.
 func rewriteValidationValueCalls(input string) string {
 	if strings.TrimSpace(input) == "" {
 		return input
@@ -151,6 +165,9 @@ func rewriteValidationValueCalls(input string) string {
 	return builder.String()
 }
 
+// rewriteValueCallsInCode walks through the provided code segment and replaces
+// helper invocations while carefully tracking string/escape state so that
+// embedded text remains unchanged.
 func rewriteValueCallsInCode(code string) string {
 	if code == "" {
 		return code
@@ -197,6 +214,9 @@ func rewriteValueCallsInCode(code string) string {
 	return builder.String()
 }
 
+// shouldRewriteValueCall verifies that a `value` identifier at the supplied
+// index is a standalone helper invocation (instead of a property access or a
+// different identifier) before triggering the rewrite.
 func shouldRewriteValueCall(code string, idx int) bool {
 	if idx > 0 {
 		prev := code[idx-1]
