@@ -1,65 +1,66 @@
 package service
 
 import (
-        "errors"
-        "fmt"
-        "math"
-        "sort"
-        "strconv"
-        "strings"
-        "sync"
-        "time"
+	"errors"
+	"fmt"
+	"math"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/vm"
 	"github.com/rs/zerolog"
+	"github.com/shopspring/decimal"
 
 	"modbus_processor/internal/config"
 )
 
 type logicDependency struct {
-        cell *cell
-        kind config.ValueKind
-        threshold float64
+	cell      *cell
+	kind      config.ValueKind
+	threshold float64
 }
 
 type logicBlock struct {
-        cfg                     config.LogicBlockConfig
-        target                  *cell
-        deps                    []logicDependency
-        trackedDeps             []logicDependency
-        expression              *vm.Program
-        validExpr               *vm.Program
-        qualityExpr             *vm.Program
-        dsl                     *dslEngine
-        order                   int
+	cfg                     config.LogicBlockConfig
+	target                  *cell
+	deps                    []logicDependency
+	trackedDeps             []logicDependency
+	expression              *vm.Program
+	validExpr               *vm.Program
+	qualityExpr             *vm.Program
+	dsl                     *dslEngine
+	order                   int
 	expressionDependencyIDs []string
 	validDependencyIDs      []string
 	qualityDependencyIDs    []string
-        dependents              []*logicBlock
-        internalDependencies    int
-        metrics                 logicBlockMetrics
+	dependents              []*logicBlock
+	internalDependencies    int
+	metrics                 logicBlockMetrics
 }
 
 type dependencySnapshot struct {
-        Valid bool
-        Value interface{}
+	Valid bool
+	Value interface{}
 }
 
 type logicBlockMetrics struct {
-        mu      sync.Mutex
-        calls   uint64
-        skipped uint64
-        total   time.Duration
-        last    time.Duration
-        prev    map[string]dependencySnapshot
+	mu      sync.Mutex
+	calls   uint64
+	skipped uint64
+	total   time.Duration
+	last    time.Duration
+	prev    map[string]dependencySnapshot
 }
 
 type logicMetricsSnapshot struct {
-        Calls          uint64
-        Skipped        uint64
-        Average        time.Duration
-        Last           time.Duration
+	Calls   uint64
+	Skipped uint64
+	Average time.Duration
+	Last    time.Duration
 }
 
 type validationResult struct {
@@ -147,14 +148,14 @@ type dependencyMeta struct {
 }
 
 func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEngine, order int) (*logicBlock, map[string]*dependencyMeta, error) {
-        block := &logicBlock{cfg: cfg, dsl: dsl, order: order}
-        meta := make(map[string]*dependencyMeta)
-        thresholds := make(map[string]float64)
+	block := &logicBlock{cfg: cfg, dsl: dsl, order: order}
+	meta := make(map[string]*dependencyMeta)
+	thresholds := make(map[string]float64)
 
-        ensure := func(id string) *dependencyMeta {
-                if id == "" {
-                        return nil
-                }
+	ensure := func(id string) *dependencyMeta {
+		if id == "" {
+			return nil
+		}
 		entry, ok := meta[id]
 		if !ok {
 			entry = &dependencyMeta{}
@@ -177,19 +178,19 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 	validIDs := make(map[string]struct{})
 	qualityIDs := make(map[string]struct{})
 
-        for _, depCfg := range cfg.Dependencies {
-                entry := ensure(depCfg.Cell)
-                if entry == nil {
-                        continue
-                }
-                entry.expression = true
-                entry.configured = true
-                thresholds[depCfg.Cell] = depCfg.Threshold
-                depCell, depErr := cells.mustGet(depCfg.Cell)
-                if depErr != nil {
-                        return block, meta, fmt.Errorf("logic block %s dependency %s: %w", cfg.ID, depCfg.Cell, depErr)
-                }
-                if depCfg.Type != "" && depCell.cfg.Type != depCfg.Type {
+	for _, depCfg := range cfg.Dependencies {
+		entry := ensure(depCfg.Cell)
+		if entry == nil {
+			continue
+		}
+		entry.expression = true
+		entry.configured = true
+		thresholds[depCfg.Cell] = depCfg.Threshold
+		depCell, depErr := cells.mustGet(depCfg.Cell)
+		if depErr != nil {
+			return block, meta, fmt.Errorf("logic block %s dependency %s: %w", cfg.ID, depCfg.Cell, depErr)
+		}
+		if depCfg.Type != "" && depCell.cfg.Type != depCfg.Type {
 			return block, meta, fmt.Errorf("logic block %s dependency %s expects %s but cell is %s", cfg.ID, depCfg.Cell, depCfg.Type, depCell.cfg.Type)
 		}
 		entry.cell = depCell
@@ -269,34 +270,34 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 		entry.cell = depCell
 	}
 
-        block.expressionDependencyIDs = sortKeys(expressionIDs)
-        block.validDependencyIDs = sortKeys(validIDs)
-        block.qualityDependencyIDs = sortKeys(qualityIDs)
+	block.expressionDependencyIDs = sortKeys(expressionIDs)
+	block.validDependencyIDs = sortKeys(validIDs)
+	block.qualityDependencyIDs = sortKeys(qualityIDs)
 
-        deps := make([]logicDependency, 0, len(block.expressionDependencyIDs))
-        for _, id := range block.expressionDependencyIDs {
-                entry := meta[id]
-                if entry == nil || entry.cell == nil {
-                        continue
-                }
-                deps = append(deps, logicDependency{cell: entry.cell, kind: entry.cell.cfg.Type, threshold: thresholds[id]})
-        }
-        block.deps = deps
+	deps := make([]logicDependency, 0, len(block.expressionDependencyIDs))
+	for _, id := range block.expressionDependencyIDs {
+		entry := meta[id]
+		if entry == nil || entry.cell == nil {
+			continue
+		}
+		deps = append(deps, logicDependency{cell: entry.cell, kind: entry.cell.cfg.Type, threshold: thresholds[id]})
+	}
+	block.deps = deps
 
-        tracked := make([]logicDependency, 0, len(meta))
-        for id, entry := range meta {
-                if entry == nil || entry.cell == nil {
-                        continue
-                }
-                if !entry.expression && !entry.valid && !entry.quality {
-                        continue
-                }
-                tracked = append(tracked, logicDependency{cell: entry.cell, kind: entry.cell.cfg.Type, threshold: thresholds[id]})
-        }
-        sort.Slice(tracked, func(i, j int) bool { return tracked[i].cell.cfg.ID < tracked[j].cell.cfg.ID })
-        block.trackedDeps = tracked
+	tracked := make([]logicDependency, 0, len(meta))
+	for id, entry := range meta {
+		if entry == nil || entry.cell == nil {
+			continue
+		}
+		if !entry.expression && !entry.valid && !entry.quality {
+			continue
+		}
+		tracked = append(tracked, logicDependency{cell: entry.cell, kind: entry.cell.cfg.Type, threshold: thresholds[id]})
+	}
+	sort.Slice(tracked, func(i, j int) bool { return tracked[i].cell.cfg.ID < tracked[j].cell.cfg.ID })
+	block.trackedDeps = tracked
 
-        return block, meta, nil
+	return block, meta, nil
 }
 
 func sortKeys(values map[string]struct{}) []string {
@@ -540,28 +541,28 @@ func topoSort(blocks []*logicBlock, producers map[string]*logicBlock) ([]*logicB
 }
 
 func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue, mu *sync.RWMutex, logger zerolog.Logger) int {
-        errors := 0
-        if b.target == nil {
-                return 0
-        }
+	errors := 0
+	if b.target == nil {
+		return 0
+	}
 
-        blockLogger := logger.With().Str("block", b.cfg.ID).Logger()
-        blockLogger.Trace().Msg("logic block evaluation started")
+	blockLogger := logger.With().Str("block", b.cfg.ID).Logger()
+	blockLogger.Trace().Msg("logic block evaluation started")
 
-        view := cloneSnapshotValues(snapshot, mu)
-        if !b.shouldEvaluate(view) {
-                blockLogger.Trace().Msg("skipping evaluation (inputs unchanged)")
-                return 0
-        }
-        ready := b.dependenciesReady(view)
-        start := time.Now()
-        defer func() {
-                b.metrics.recordCall(time.Since(start))
-        }()
-        var (
-                value   interface{}
-                evalErr error
-        )
+	view := cloneSnapshotValues(snapshot, mu)
+	if !b.shouldEvaluate(view) {
+		blockLogger.Trace().Msg("skipping evaluation (inputs unchanged)")
+		return 0
+	}
+	ready := b.dependenciesReady(view)
+	start := time.Now()
+	defer func() {
+		b.metrics.recordCall(time.Since(start))
+	}()
+	var (
+		value   interface{}
+		evalErr error
+	)
 
 	switch {
 	case !ready:
@@ -589,12 +590,12 @@ func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue,
 		decision.valid = false
 	}
 
-        if decision.valid {
-                if err := b.target.setValue(value, now, decision.quality); err != nil {
-                        blockLogger.Error().Err(err).Msg("assign result")
-                        b.target.markInvalid(now, "logic.assign", err.Error())
-                        updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
-                        errors++
+	if decision.valid {
+		if err := b.target.setValue(value, now, decision.quality); err != nil {
+			blockLogger.Error().Err(err).Msg("assign result")
+			b.target.markInvalid(now, "logic.assign", err.Error())
+			updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
+			errors++
 			return errors
 		}
 		updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
@@ -618,10 +619,10 @@ func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue,
 }
 
 func (b *logicBlock) dependenciesReady(snapshot map[string]*snapshotValue) bool {
-        for _, dep := range b.deps {
-                snap := snapshot[dep.cell.cfg.ID]
-                if snap == nil {
-                        return false
+	for _, dep := range b.deps {
+		snap := snapshot[dep.cell.cfg.ID]
+		if snap == nil {
+			return false
 		}
 		if snap.Kind != dep.kind {
 			return false
@@ -631,8 +632,8 @@ func (b *logicBlock) dependenciesReady(snapshot map[string]*snapshotValue) bool 
 }
 
 func (b *logicBlock) runExpression(snapshot map[string]*snapshotValue) (interface{}, error) {
-        if b.expression == nil {
-                return nil, evaluationError{Code: "logic.expression_missing", Message: "no expression configured"}
+	if b.expression == nil {
+		return nil, evaluationError{Code: "logic.expression_missing", Message: "no expression configured"}
 	}
 	env := make(map[string]interface{}, len(snapshot)+5)
 	for id, value := range snapshot {
@@ -671,116 +672,179 @@ func (b *logicBlock) runExpression(snapshot map[string]*snapshotValue) (interfac
 }
 
 func (b *logicBlock) shouldEvaluate(snapshot map[string]*snapshotValue) bool {
-        if len(b.trackedDeps) == 0 {
-                return true
-        }
-        b.metrics.mu.Lock()
-        defer b.metrics.mu.Unlock()
-        if b.metrics.prev == nil {
-                b.metrics.prev = make(map[string]dependencySnapshot, len(b.trackedDeps))
-        }
-        changed := false
-        for _, dep := range b.trackedDeps {
-                id := dep.cell.cfg.ID
-                snap := snapshot[id]
-                current := dependencySnapshot{}
-                if snap != nil {
-                        current.Valid = snap.Valid
-                        if snap.Valid {
-                                switch dep.kind {
-                                case config.ValueKindNumber:
-                                        current.Value = asFloat64(snap.Value)
-                                default:
-                                        current.Value = cloneValue(snap.Value)
-                                }
-                        }
-                }
-                if !changed {
-                        prev, ok := b.metrics.prev[id]
-                        if !ok {
-                                changed = true
-                        } else if current.Valid != prev.Valid {
-                                changed = true
-                        } else if current.Valid {
-                                switch dep.kind {
-                                case config.ValueKindNumber:
-                                        cur := asFloat64(current.Value)
-                                        old := asFloat64(prev.Value)
-                                        threshold := dep.threshold
-                                        if threshold < 0 {
-                                                threshold = 0
-                                        }
-                                        if math.IsNaN(cur) || math.IsNaN(old) || math.Abs(cur-old) > threshold {
-                                                changed = true
-                                        }
-                                default:
-                                        if current.Value != prev.Value {
-                                                changed = true
-                                        }
-                                }
-                        }
-                }
-                b.metrics.prev[id] = current
-        }
-        if !changed {
-                b.metrics.skipped++
-                return false
-        }
-        return true
+	if len(b.trackedDeps) == 0 {
+		return true
+	}
+	b.metrics.mu.Lock()
+	defer b.metrics.mu.Unlock()
+	if b.metrics.prev == nil {
+		b.metrics.prev = make(map[string]dependencySnapshot, len(b.trackedDeps))
+	}
+	changed := false
+	for _, dep := range b.trackedDeps {
+		id := dep.cell.cfg.ID
+		snap := snapshot[id]
+		current := dependencySnapshot{}
+		if snap != nil {
+			current.Valid = snap.Valid
+			if snap.Valid {
+				switch dep.kind {
+				case config.ValueKindNumber, config.ValueKindFloat, config.ValueKindInteger:
+					current.Value = asFloat64(snap.Value)
+				case config.ValueKindDecimal:
+					current.Value = asDecimalValue(snap.Value)
+				default:
+					current.Value = cloneValue(snap.Value)
+				}
+			}
+		}
+		if !changed {
+			prev, ok := b.metrics.prev[id]
+			if !ok {
+				changed = true
+			} else if current.Valid != prev.Valid {
+				changed = true
+			} else if current.Valid {
+				switch dep.kind {
+				case config.ValueKindNumber, config.ValueKindFloat, config.ValueKindInteger:
+					cur := asFloat64(current.Value)
+					old := asFloat64(prev.Value)
+					threshold := dep.threshold
+					if threshold < 0 {
+						threshold = 0
+					}
+					if math.IsNaN(cur) || math.IsNaN(old) || math.Abs(cur-old) > threshold {
+						changed = true
+					}
+				case config.ValueKindDecimal:
+					cur := asDecimalValue(current.Value)
+					old := asDecimalValue(prev.Value)
+					diff := cur.Sub(old).Abs()
+					threshold := decimal.NewFromFloat(dep.threshold)
+					if threshold.Sign() < 0 {
+						threshold = decimal.Zero
+					}
+					if diff.Cmp(threshold) > 0 {
+						changed = true
+					}
+				default:
+					if current.Value != prev.Value {
+						changed = true
+					}
+				}
+			}
+		}
+		b.metrics.prev[id] = current
+	}
+	if !changed {
+		b.metrics.skipped++
+		return false
+	}
+	return true
 }
 
 func asFloat64(value interface{}) float64 {
-        switch v := value.(type) {
-        case float64:
-                return v
-        case float32:
-                return float64(v)
-        case int:
-                return float64(v)
-        case int8:
-                return float64(v)
-        case int16:
-                return float64(v)
-        case int32:
-                return float64(v)
-        case int64:
-                return float64(v)
-        case uint:
-                return float64(v)
-        case uint8:
-                return float64(v)
-        case uint16:
-                return float64(v)
-        case uint32:
-                return float64(v)
-        case uint64:
-                return float64(v)
-        default:
-                return math.NaN()
-        }
+	switch v := value.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int8:
+		return float64(v)
+	case int16:
+		return float64(v)
+	case int32:
+		return float64(v)
+	case uint:
+		return float64(v)
+	case uint8:
+		return float64(v)
+	case uint16:
+		return float64(v)
+	case uint32:
+		return float64(v)
+	case uint64:
+		return float64(v)
+	case decimal.Decimal:
+		f, _ := v.Float64()
+		return f
+	default:
+		return math.NaN()
+	}
+}
+
+func asDecimalValue(value interface{}) decimal.Decimal {
+	switch v := value.(type) {
+	case decimal.Decimal:
+		return v
+	case *decimal.Decimal:
+		if v == nil {
+			return decimal.Zero
+		}
+		return *v
+	case float64:
+		return decimal.RequireFromString(strconv.FormatFloat(v, 'f', -1, 64))
+	case float32:
+		return decimal.RequireFromString(strconv.FormatFloat(float64(v), 'f', -1, 32))
+	case int:
+		return decimal.NewFromInt(int64(v))
+	case int8:
+		return decimal.NewFromInt(int64(v))
+	case int16:
+		return decimal.NewFromInt(int64(v))
+	case int32:
+		return decimal.NewFromInt(int64(v))
+	case int64:
+		return decimal.NewFromInt(v)
+	case uint:
+		return decimal.NewFromInt(int64(v))
+	case uint8:
+		return decimal.NewFromInt(int64(v))
+	case uint16:
+		return decimal.NewFromInt(int64(v))
+	case uint32:
+		return decimal.NewFromInt(int64(v))
+	case uint64:
+		if v > math.MaxInt64 {
+			return decimal.Zero
+		}
+		return decimal.NewFromInt(int64(v))
+	case string:
+		dec, err := decimal.NewFromString(v)
+		if err != nil {
+			return decimal.Zero
+		}
+		return dec
+	default:
+		return decimal.Zero
+	}
 }
 
 func (m *logicBlockMetrics) recordCall(duration time.Duration) {
-        m.mu.Lock()
-        defer m.mu.Unlock()
-        m.calls++
-        m.last = duration
-        m.total += duration
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	m.last = duration
+	m.total += duration
 }
 
 func (b *logicBlock) metricsSnapshot() logicMetricsSnapshot {
-        b.metrics.mu.Lock()
-        defer b.metrics.mu.Unlock()
-        avg := time.Duration(0)
-        if b.metrics.calls > 0 {
-                avg = b.metrics.total / time.Duration(b.metrics.calls)
-        }
-        return logicMetricsSnapshot{
-                Calls:   b.metrics.calls,
-                Skipped: b.metrics.skipped,
-                Average: avg,
-                Last:    b.metrics.last,
-        }
+	b.metrics.mu.Lock()
+	defer b.metrics.mu.Unlock()
+	avg := time.Duration(0)
+	if b.metrics.calls > 0 {
+		avg = b.metrics.total / time.Duration(b.metrics.calls)
+	}
+	return logicMetricsSnapshot{
+		Calls:   b.metrics.calls,
+		Skipped: b.metrics.skipped,
+		Average: avg,
+		Last:    b.metrics.last,
+	}
 }
 
 func (b *logicBlock) runValidation(snapshot map[string]*snapshotValue, value interface{}, evalErr error) (validationResult, error) {

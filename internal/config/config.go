@@ -47,12 +47,20 @@ func (d Duration) MarshalYAML() (interface{}, error) {
 type ValueKind string
 
 const (
-	// ValueKindNumber represents floating point numbers.
-	ValueKindNumber ValueKind = "number"
-	// ValueKindBool represents boolean values.
-	ValueKindBool ValueKind = "bool"
-	// ValueKindString represents plain UTF-8 strings.
-	ValueKindString ValueKind = "string"
+        // ValueKindNumber represents floating point numbers.
+        ValueKindNumber ValueKind = "number"
+        // ValueKindFloat represents floating point numbers (alias for number).
+        ValueKindFloat ValueKind = "float"
+        // ValueKindInteger represents signed integer values.
+        ValueKindInteger ValueKind = "integer"
+        // ValueKindDecimal represents arbitrary precision decimal numbers.
+        ValueKindDecimal ValueKind = "decimal"
+        // ValueKindBool represents boolean values.
+        ValueKindBool ValueKind = "bool"
+        // ValueKindString represents plain UTF-8 strings.
+        ValueKindString ValueKind = "string"
+        // ValueKindDate represents calendar date values.
+        ValueKindDate ValueKind = "date"
 )
 
 // EndpointConfig describes how to reach a Modbus slave.
@@ -236,16 +244,22 @@ type LokiConfig struct {
 
 // LoggingConfig encapsulates runtime logging options.
 type LoggingConfig struct {
-	Level  string     `yaml:"level"`
-	Format string     `yaml:"format,omitempty"`
-	Loki   LokiConfig `yaml:"loki"`
+        Level  string     `yaml:"level"`
+        Format string     `yaml:"format,omitempty"`
+        Loki   LokiConfig `yaml:"loki"`
+}
+
+// TelemetryConfig configures runtime telemetry exporters.
+type TelemetryConfig struct {
+        Enabled  bool   `yaml:"enabled"`
+        Provider string `yaml:"provider,omitempty"`
 }
 
 // WorkerSlots configures the concurrency for each pipeline stage.
 type WorkerSlots struct {
-	Read    int `yaml:"read,omitempty"`
-	Program int `yaml:"program,omitempty"`
-	Execute int `yaml:"execute,omitempty"`
+        Read    int `yaml:"read,omitempty"`
+        Program int `yaml:"program,omitempty"`
+        Execute int `yaml:"execute,omitempty"`
 	Write   int `yaml:"write,omitempty"`
 }
 
@@ -267,22 +281,24 @@ type ServerConfig struct {
 
 // Config is the root configuration structure for the service.
 type Config struct {
-	Name        string                 `yaml:"name,omitempty"`
-	Description string                 `yaml:"description,omitempty"`
-	Cycle       Duration               `yaml:"cycle"`
-	Logging     LoggingConfig          `yaml:"logging"`
-	Modules     []ModuleInclude        `yaml:"modules"`
-	Workers     WorkerSlots            `yaml:"workers,omitempty"`
-	Programs    []ProgramConfig        `yaml:"programs,omitempty"`
-	Cells       []CellConfig           `yaml:"cells"`
-	Reads       []ReadGroupConfig      `yaml:"reads"`
+        Name        string                 `yaml:"name,omitempty"`
+        Description string                 `yaml:"description,omitempty"`
+        Cycle       Duration               `yaml:"cycle"`
+        Logging     LoggingConfig          `yaml:"logging"`
+        Telemetry   TelemetryConfig        `yaml:"telemetry"`
+        Modules     []ModuleInclude        `yaml:"modules"`
+        Workers     WorkerSlots            `yaml:"workers,omitempty"`
+        Programs    []ProgramConfig        `yaml:"programs,omitempty"`
+        Cells       []CellConfig           `yaml:"cells"`
+        Reads       []ReadGroupConfig      `yaml:"reads"`
 	Writes      []WriteTargetConfig    `yaml:"writes"`
 	Logic       []LogicBlockConfig     `yaml:"logic"`
-	DSL         DSLConfig              `yaml:"dsl"`
-	Helpers     []HelperFunctionConfig `yaml:"helpers,omitempty"`
-	Policies    GlobalPolicies         `yaml:"policies"`
-	Server      ServerConfig           `yaml:"server"`
-	Source      ModuleReference        `yaml:"-"`
+        DSL         DSLConfig              `yaml:"dsl"`
+        Helpers     []HelperFunctionConfig `yaml:"helpers,omitempty"`
+        Policies    GlobalPolicies         `yaml:"policies"`
+        Server      ServerConfig           `yaml:"server"`
+        HotReload   bool                   `yaml:"hot_reload,omitempty"`
+        Source      ModuleReference        `yaml:"-"`
 }
 
 // Load reads and decodes the configuration file from disk.
@@ -416,14 +432,17 @@ func mergeConfig(dst, src *Config) {
 	if src.Logging.Format != "" {
 		dst.Logging.Format = src.Logging.Format
 	}
-	if src.Logging.Loki.Enabled || src.Logging.Loki.URL != "" || len(src.Logging.Loki.Labels) > 0 {
-		dst.Logging.Loki = src.Logging.Loki
-	}
-	if src.Workers != (WorkerSlots{}) {
-		dst.Workers = src.Workers
-	}
-	if len(src.DSL.Helpers) > 0 {
-		dst.DSL.Helpers = append(dst.DSL.Helpers, src.DSL.Helpers...)
+        if src.Logging.Loki.Enabled || src.Logging.Loki.URL != "" || len(src.Logging.Loki.Labels) > 0 {
+                dst.Logging.Loki = src.Logging.Loki
+        }
+        if src.Telemetry.Enabled || src.Telemetry.Provider != "" {
+                dst.Telemetry = src.Telemetry
+        }
+        if src.Workers != (WorkerSlots{}) {
+                dst.Workers = src.Workers
+        }
+        if len(src.DSL.Helpers) > 0 {
+                dst.DSL.Helpers = append(dst.DSL.Helpers, src.DSL.Helpers...)
 	}
 	if len(src.Helpers) > 0 {
 		dst.Helpers = append(dst.Helpers, src.Helpers...)
@@ -431,11 +450,14 @@ func mergeConfig(dst, src *Config) {
 	if src.Policies != (GlobalPolicies{}) {
 		dst.Policies = src.Policies
 	}
-	if src.Server.Enabled || src.Server.Listen != "" || src.Server.UnitID != 0 || len(src.Server.Cells) > 0 {
-		dst.Server = src.Server
-	}
+        if src.Server.Enabled || src.Server.Listen != "" || src.Server.UnitID != 0 || len(src.Server.Cells) > 0 {
+                dst.Server = src.Server
+        }
+        if src.HotReload {
+                dst.HotReload = true
+        }
 
-	dst.Programs = append(dst.Programs, src.Programs...)
+        dst.Programs = append(dst.Programs, src.Programs...)
 	dst.Cells = append(dst.Cells, src.Cells...)
 	dst.Reads = append(dst.Reads, src.Reads...)
 	dst.Writes = append(dst.Writes, src.Writes...)
