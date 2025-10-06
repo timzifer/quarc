@@ -111,6 +111,22 @@ func (e *dslEngine) compileExpression(exprStr string) (*vm.Program, error) {
 	return program, nil
 }
 
+func (e *dslEngine) compileValidationExpression(exprStr string) (*vm.Program, error) {
+	processed, err := e.preprocess(strings.TrimSpace(exprStr))
+	if err != nil {
+		return nil, err
+	}
+	if processed == "" {
+		return nil, nil
+	}
+	processed = rewriteValidationValueCalls(processed)
+	program, err := expr.Compile(processed, expr.Env(map[string]interface{}{}), expr.AllowUndefinedVariables())
+	if err != nil {
+		return nil, err
+	}
+	return program, nil
+}
+
 func (e *dslEngine) helperNames() map[string]struct{} {
 	if len(e.helpers) == 0 {
 		return nil

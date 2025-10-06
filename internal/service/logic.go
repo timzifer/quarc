@@ -218,7 +218,7 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 	}
 
 	if strings.TrimSpace(cfg.Valid) != "" {
-		program, err := dsl.compileExpression(cfg.Valid)
+		program, err := dsl.compileValidationExpression(cfg.Valid)
 		if err != nil {
 			return block, meta, fmt.Errorf("logic block %s valid: %w", cfg.ID, err)
 		}
@@ -234,7 +234,7 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 	}
 
 	if strings.TrimSpace(cfg.Quality) != "" {
-		program, err := dsl.compileExpression(cfg.Quality)
+		program, err := dsl.compileValidationExpression(cfg.Quality)
 		if err != nil {
 			return block, meta, fmt.Errorf("logic block %s quality: %w", cfg.ID, err)
 		}

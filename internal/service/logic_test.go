@@ -207,6 +207,59 @@ func TestHelperFunctionUsage(t *testing.T) {
 	}
 }
 
+func TestValidationExpressionValueFunctionAlias(t *testing.T) {
+	dsl, err := newDSLEngine(config.DSLConfig{}, nil, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("newDSLEngine: %v", err)
+	}
+
+	cells, err := newCellStore([]config.CellConfig{
+		{ID: "input", Type: config.ValueKindNumber},
+		{ID: "target", Type: config.ValueKindNumber},
+	})
+	if err != nil {
+		t.Fatalf("newCellStore: %v", err)
+	}
+
+	cfg := config.LogicBlockConfig{
+		ID:         "alias",
+		Target:     "target",
+		Expression: `value("input")`,
+		Valid:      `let t = value("input"); t > 0`,
+	}
+
+	block, _, err := prepareLogicBlock(cfg, cells, dsl, 0)
+	if err != nil {
+		t.Fatalf("prepareLogicBlock: %v", err)
+	}
+
+	now := time.Now()
+	input, err := cells.mustGet("input")
+	if err != nil {
+		t.Fatalf("mustGet: %v", err)
+	}
+	if err := input.setValue(float64(10), now, nil); err != nil {
+		t.Fatalf("setValue: %v", err)
+	}
+
+	snapshot := cells.snapshot()
+	result, exprErr := block.runExpression(snapshot)
+	if exprErr != nil {
+		t.Fatalf("runExpression: %v", exprErr)
+	}
+	if got, ok := result.(float64); !ok || got != 10 {
+		t.Fatalf("unexpected expression result: %v", result)
+	}
+
+	decision, valErr := block.runValidation(snapshot, result, nil)
+	if valErr != nil {
+		t.Fatalf("runValidation: %v", valErr)
+	}
+	if !decision.valid {
+		t.Fatalf("expected validator to accept value: %+v", decision)
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
