@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 	"time"
 
@@ -262,4 +263,18 @@ func (s *cellStore) state(id string) (CellState, error) {
 		return CellState{}, err
 	}
 	return cell.state(), nil
+}
+
+func (s *cellStore) states() []CellState {
+	ids := s.ids()
+	sort.Strings(ids)
+	out := make([]CellState, 0, len(ids))
+	for _, id := range ids {
+		state, err := s.state(id)
+		if err != nil {
+			continue
+		}
+		out = append(out, state)
+	}
+	return out
 }

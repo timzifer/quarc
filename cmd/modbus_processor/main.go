@@ -21,6 +21,8 @@ func main() {
 	cfgPath := flag.String("config", "config.yaml", "Path to configuration file")
 	healthcheck := flag.Bool("healthcheck", false, "Run a health check and exit")
 	configCheck := flag.Bool("config-check", false, "Validate configuration and exit")
+	liveView := flag.Bool("live-view", false, "Enable live view web interface")
+	liveViewListen := flag.String("live-view-listen", ":18080", "Live view listen address")
 	flag.Parse()
 
 	if *healthcheck {
@@ -53,6 +55,12 @@ func main() {
 		logger.Fatal().Err(err).Msg("failed to create service")
 	}
 	defer srv.Close()
+
+	if *liveView {
+		if err := srv.EnableLiveView(*liveViewListen); err != nil {
+			logger.Fatal().Err(err).Msg("failed to start live view")
+		}
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -27,9 +28,12 @@ type Service struct {
 	programs []*programBinding
 	workers  workerSlots
 
-	cycle         time.Duration
 	metrics       metrics
 	lastCycleTime time.Time
+
+	controller *cycleController
+	cycle      atomic.Int64
+	liveView   *liveViewServer
 }
 
 type metrics struct {
@@ -122,8 +126,9 @@ func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory
 		writes:        writes,
 		server:        srv,
 		workers:       newWorkerSlots(cfg.Workers),
-		cycle:         cfg.CycleInterval(),
 	}
+	svc.controller = newCycleController(cfg.CycleInterval())
+	svc.cycle.Store(int64(cfg.CycleInterval()))
 	if len(programs) > 0 {
 		svc.programs = programs
 	}
@@ -166,17 +171,16 @@ func Validate(cfg *config.Config, logger zerolog.Logger) error {
 
 // Run executes the controller loop until the context is cancelled.
 func (s *Service) Run(ctx context.Context) error {
-	ticker := time.NewTicker(s.cycle)
-	defer ticker.Stop()
-
 	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case now := <-ticker.C:
-			if err := s.IterateOnce(ctx, now); err != nil {
-				s.logger.Error().Err(err).Msg("iteration failure")
+		now, err := s.controller.Wait(ctx)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil
 			}
+			return err
+		}
+		if err := s.IterateOnce(ctx, now); err != nil {
+			s.logger.Error().Err(err).Msg("iteration failure")
 		}
 	}
 }
@@ -325,6 +329,51 @@ func (s *Service) Metrics() metrics {
 	return s.metrics
 }
 
+func (s *Service) cycleInterval() time.Duration {
+	if s == nil {
+		return 0
+	}
+	if ns := s.cycle.Load(); ns > 0 {
+		return time.Duration(ns)
+	}
+	return 500 * time.Millisecond
+}
+
+func (s *Service) setCycleInterval(d time.Duration) {
+	if d <= 0 {
+		d = 500 * time.Millisecond
+	}
+	s.cycle.Store(int64(d))
+	if s.controller != nil {
+		s.controller.SetInterval(d)
+	}
+}
+
+// EnableLiveView starts the optional live view HTTP server.
+func (s *Service) EnableLiveView(listen string) error {
+	if s == nil {
+		return errors.New("service is nil")
+	}
+	if s.liveView != nil {
+		return errors.New("live view already enabled")
+	}
+	if listen == "" {
+		listen = ":18080"
+	}
+	if s.controller == nil {
+		s.controller = newCycleController(s.cycleInterval())
+	} else {
+		s.controller.SetInterval(s.cycleInterval())
+	}
+	logger := s.logger.With().Str("component", "live_view").Logger()
+	server, err := newLiveViewServer(listen, s, logger)
+	if err != nil {
+		return err
+	}
+	s.liveView = server
+	return nil
+}
+
 // Close releases all background resources held by the service.
 func (s *Service) Close() error {
 	if s == nil {
@@ -338,6 +387,9 @@ func (s *Service) Close() error {
 	}
 	if s.server != nil {
 		s.server.close()
+	}
+	if s.liveView != nil {
+		s.liveView.close()
 	}
 	return nil
 }
