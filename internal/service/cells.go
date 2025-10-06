@@ -16,18 +16,20 @@ type diagnosis struct {
 }
 
 type cell struct {
-	cfg    config.CellConfig
-	mu     sync.RWMutex
-	value  interface{}
-	valid  bool
-	diag   *diagnosis
-	update time.Time
+	cfg     config.CellConfig
+	mu      sync.RWMutex
+	value   interface{}
+	valid   bool
+	quality *float64
+	diag    *diagnosis
+	update  time.Time
 }
 
 type snapshotValue struct {
-	Value interface{}
-	Valid bool
-	Kind  config.ValueKind
+	Value   interface{}
+	Valid   bool
+	Kind    config.ValueKind
+	Quality *float64
 }
 
 // CellDiagnosis is a public representation of a diagnostic entry associated with a cell.
@@ -43,6 +45,7 @@ type CellState struct {
 	Kind      config.ValueKind
 	Value     interface{}
 	Valid     bool
+	Quality   *float64
 	Diagnosis *CellDiagnosis
 	UpdatedAt time.Time
 }
@@ -66,7 +69,7 @@ func newCellStore(cfgs []config.CellConfig) (*cellStore, error) {
 		}
 		c := &cell{cfg: cfg, valid: false}
 		if cfg.Constant != nil {
-			if err := c.setValue(cfg.Constant, time.Time{}); err != nil {
+			if err := c.setValue(cfg.Constant, time.Time{}, nil); err != nil {
 				return nil, fmt.Errorf("cell %s constant: %w", cfg.ID, err)
 			}
 		}
@@ -98,7 +101,7 @@ func (s *cellStore) snapshot() map[string]*snapshotValue {
 	return snap
 }
 
-func (c *cell) setValue(value interface{}, ts time.Time) error {
+func (c *cell) setValue(value interface{}, ts time.Time, quality *float64) error {
 	converted, err := convertValue(c.cfg.Type, value)
 	if err != nil {
 		return err
@@ -106,6 +109,7 @@ func (c *cell) setValue(value interface{}, ts time.Time) error {
 	c.mu.Lock()
 	c.value = converted
 	c.valid = true
+	c.quality = cloneQuality(quality)
 	c.diag = nil
 	c.update = ts
 	c.mu.Unlock()
@@ -116,6 +120,7 @@ func (c *cell) markInvalid(ts time.Time, code, message string) {
 	c.mu.Lock()
 	c.value = nil
 	c.valid = false
+	c.quality = nil
 	c.diag = &diagnosis{Code: code, Message: message, Timestamp: ts}
 	c.update = ts
 	c.mu.Unlock()
@@ -124,7 +129,7 @@ func (c *cell) markInvalid(ts time.Time, code, message string) {
 func (c *cell) asSnapshotValue() *snapshotValue {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return &snapshotValue{Value: cloneValue(c.value), Valid: c.valid, Kind: c.cfg.Type}
+	return &snapshotValue{Value: cloneValue(c.value), Valid: c.valid, Kind: c.cfg.Type, Quality: cloneQuality(c.quality)}
 }
 
 func convertValue(kind config.ValueKind, value interface{}) (interface{}, error) {
@@ -206,6 +211,14 @@ func cloneValue(value interface{}) interface{} {
 	}
 }
 
+func cloneQuality(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
 func (s *cellStore) ids() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -237,6 +250,7 @@ func (c *cell) state() CellState {
 		Kind:      c.cfg.Type,
 		Value:     cloneValue(c.value),
 		Valid:     c.valid,
+		Quality:   cloneQuality(c.quality),
 		Diagnosis: diag,
 		UpdatedAt: c.update,
 	}

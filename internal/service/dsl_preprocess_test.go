@@ -19,7 +19,7 @@ func TestConvertStandaloneDumpAndLogCalls(t *testing.T) {
 let value_a = 1;
 dump(value_a);
 log("debug", value_a); // note: keep comment
-success(value_a)
+value_a
 `
 
 	processed, err := engine.preprocess(expression)

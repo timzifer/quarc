@@ -25,10 +25,11 @@ func TestPrepareLogicBlockAutoDependencies(t *testing.T) {
 	}
 
 	cfg := config.LogicBlockConfig{
-		ID:       "example",
-		Target:   "target",
-		Normal:   "success(value(\"a\") + value(\"b\"))",
-		Fallback: "success(valid(\"a\") ? value(\"a\") : 0)",
+		ID:         "example",
+		Target:     "target",
+		Expression: "value(\"a\") + value(\"b\")",
+		Valid:      "valid(\"a\") && valid(\"b\")",
+		Quality:    "valid(\"a\") && valid(\"b\") ? 0.75 : 0",
 	}
 
 	block, meta, err := prepareLogicBlock(cfg, cells, dsl, 0)
@@ -39,20 +40,23 @@ func TestPrepareLogicBlockAutoDependencies(t *testing.T) {
 		t.Fatalf("block must not be nil")
 	}
 
-	if got, want := block.normalDependencyIDs, []string{"a", "b"}; !equalStringSlices(got, want) {
-		t.Fatalf("normal dependencies = %v, want %v", got, want)
+	if got, want := block.expressionDependencyIDs, []string{"a", "b"}; !equalStringSlices(got, want) {
+		t.Fatalf("expression dependencies = %v, want %v", got, want)
 	}
-	if got, want := block.fallbackDependencyIDs, []string{"a"}; !equalStringSlices(got, want) {
-		t.Fatalf("fallback dependencies = %v, want %v", got, want)
+	if got, want := block.validDependencyIDs, []string{"a", "b"}; !equalStringSlices(got, want) {
+		t.Fatalf("valid dependencies = %v, want %v", got, want)
+	}
+	if got, want := block.qualityDependencyIDs, []string{"a", "b"}; !equalStringSlices(got, want) {
+		t.Fatalf("quality dependencies = %v, want %v", got, want)
 	}
 
 	depA := meta["a"]
-	if depA == nil || !depA.normal || !depA.fallback {
-		t.Fatalf("dependency metadata for 'a' missing normal/fallback flags: %+v", depA)
+	if depA == nil || !depA.expression || !depA.valid || !depA.quality {
+		t.Fatalf("dependency metadata for 'a' missing flags: %+v", depA)
 	}
 	depB := meta["b"]
-	if depB == nil || !depB.normal {
-		t.Fatalf("dependency metadata for 'b' missing normal flag: %+v", depB)
+	if depB == nil || !depB.expression || !depB.valid || !depB.quality {
+		t.Fatalf("dependency metadata for 'b' missing flags: %+v", depB)
 	}
 }
 
@@ -73,13 +77,13 @@ func TestPrepareLogicBlockIgnoresLocalVariables(t *testing.T) {
 	expression := `
 let temperature = return_underfloor_heating_temperature;
 let flow_sensor_current = value("raw_flow_sensor_underfloor_heating") / 1000 - 4;
-success(flow_sensor_current - (0.8 * 1) + 0.8)
+flow_sensor_current - (0.8 * 1) + 0.8
 `
 
 	cfg := config.LogicBlockConfig{
-		ID:     "flow_sensor_underfloor_heating",
-		Target: "target",
-		Normal: expression,
+		ID:         "flow_sensor_underfloor_heating",
+		Target:     "target",
+		Expression: expression,
 	}
 
 	block, _, err := prepareLogicBlock(cfg, cells, dsl, 0)
@@ -88,12 +92,12 @@ success(flow_sensor_current - (0.8 * 1) + 0.8)
 	}
 
 	want := []string{"raw_flow_sensor_underfloor_heating", "return_underfloor_heating_temperature"}
-	if got := block.normalDependencyIDs; !equalStringSlices(got, want) {
-		t.Fatalf("normal dependencies = %v, want %v", got, want)
+	if got := block.expressionDependencyIDs; !equalStringSlices(got, want) {
+		t.Fatalf("expression dependencies = %v, want %v", got, want)
 	}
 }
 
-func TestPrepareLogicBlockMissingFallbackDependency(t *testing.T) {
+func TestPrepareLogicBlockMissingValidateDependency(t *testing.T) {
 	dsl, err := newDSLEngine(config.DSLConfig{}, nil, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("newDSLEngine: %v", err)
@@ -107,36 +111,27 @@ func TestPrepareLogicBlockMissingFallbackDependency(t *testing.T) {
 	}
 
 	cfg := config.LogicBlockConfig{
-		ID:       "example",
-		Target:   "target",
-		Normal:   "success(value(\"input\"))",
-		Fallback: "success(value(\"missing\"))",
+		ID:         "example",
+		Target:     "target",
+		Expression: "value(\"input\")",
+		Valid:      "cell(\"missing\")",
 	}
 
 	_, _, err = prepareLogicBlock(cfg, cells, dsl, 0)
 	if err == nil {
-		t.Fatalf("expected error for missing fallback dependency")
+		t.Fatalf("expected error for missing validate dependency")
 	}
-	if !strings.Contains(err.Error(), "fallback dependency") {
-		t.Fatalf("expected fallback dependency error, got %v", err)
+	if !strings.Contains(err.Error(), "valid dependency") {
+		t.Fatalf("expected valid dependency error, got %v", err)
 	}
 }
 
 func TestHelperFunctionUsage(t *testing.T) {
-	allowIf := true
-	dsl, err := newDSLEngine(config.DSLConfig{
-		AllowIfBlocks: &allowIf,
-	}, []config.HelperFunctionConfig{
+	dsl, err := newDSLEngine(config.DSLConfig{}, []config.HelperFunctionConfig{
 		{
-			Name:      "water_viscosity",
-			Arguments: []string{"temperature"},
-			Expression: `if temperature < 0 {
-        fail("helper.temperature", "below freezing")
-} else if temperature > 100 {
-        fail("helper.temperature", "too hot")
-} else {
-        success(temperature * 0.001)
-}`,
+			Name:       "water_viscosity",
+			Arguments:  []string{"temperature"},
+			Expression: `temperature <= 0 ? 0 : temperature * 0.001`,
 		},
 	}, zerolog.Nop())
 	if err != nil {
@@ -152,10 +147,11 @@ func TestHelperFunctionUsage(t *testing.T) {
 	}
 
 	cfg := config.LogicBlockConfig{
-		ID:       "viscosity",
-		Target:   "result",
-		Normal:   "success(water_viscosity(value(\"temperature\")))",
-		Fallback: "success(0)",
+		ID:         "viscosity",
+		Target:     "result",
+		Expression: "water_viscosity(value(\"temperature\"))",
+		Valid:      "valid(\"temperature\")",
+		Quality:    "valid(\"temperature\") ? 0.9 : 0",
 	}
 
 	block, _, err := prepareLogicBlock(cfg, cells, dsl, 0)
@@ -163,8 +159,8 @@ func TestHelperFunctionUsage(t *testing.T) {
 		t.Fatalf("prepareLogicBlock: %v", err)
 	}
 
-	if got := block.normalDependencyIDs; len(got) != 1 || got[0] != "temperature" {
-		t.Fatalf("unexpected normal dependencies: %v", got)
+	if got := block.expressionDependencyIDs; len(got) != 1 || got[0] != "temperature" {
+		t.Fatalf("unexpected expression dependencies: %v", got)
 	}
 
 	now := time.Now()
@@ -172,28 +168,42 @@ func TestHelperFunctionUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mustGet temperature: %v", err)
 	}
-	if err := temp.setValue(float64(20), now); err != nil {
+	if err := temp.setValue(float64(20), now, nil); err != nil {
 		t.Fatalf("setValue: %v", err)
 	}
 	snapshot := cells.snapshot()
-	result := block.runProgram(now, snapshot, block.normal, false, cfg.Normal, "normal")
-	if !result.success {
-		t.Fatalf("expected success, got %+v", result)
+	result, exprErr := block.runExpression(snapshot)
+	if exprErr != nil {
+		t.Fatalf("runExpression: %v", exprErr)
 	}
-	if got, ok := result.value.(float64); !ok || got != 0.02 {
-		t.Fatalf("unexpected helper result: %v (%T)", result.value, result.value)
+	if got, ok := result.(float64); !ok || got != 0.02 {
+		t.Fatalf("unexpected helper result: %v (%T)", result, result)
 	}
 
-	if err := temp.setValue(float64(-5), now); err != nil {
-		t.Fatalf("setValue: %v", err)
+	decision, valErr := block.runValidation(snapshot, result, nil)
+	if valErr != nil {
+		t.Fatalf("runValidation: %v", valErr)
 	}
+	if !decision.valid {
+		t.Fatalf("expected validator to mark result valid: %+v", decision)
+	}
+	if decision.quality == nil || *decision.quality != 0.9 {
+		t.Fatalf("unexpected quality: %v", decision.quality)
+	}
+
+	// Make the dependency invalid to trigger an evaluation error and ensure the validator sees it.
+	temp.markInvalid(now, "test.invalid", "forced")
 	snapshot = cells.snapshot()
-	failure := block.runProgram(now, snapshot, block.normal, false, cfg.Normal, "normal")
-	if failure.success {
-		t.Fatalf("expected failure result, got success")
+	_, exprErr = block.runExpression(snapshot)
+	if exprErr == nil {
+		t.Fatalf("expected expression error when dependency invalid")
 	}
-	if failure.diag == nil || failure.diag.Code != "helper.temperature" {
-		t.Fatalf("expected helper failure, got %+v", failure.diag)
+	decision, valErr = block.runValidation(snapshot, nil, exprErr)
+	if valErr != nil {
+		t.Fatalf("runValidation with error: %v", valErr)
+	}
+	if decision.valid {
+		t.Fatalf("expected invalid decision when expression errored")
 	}
 }
 
