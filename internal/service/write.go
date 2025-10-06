@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -13,11 +15,15 @@ import (
 )
 
 type writeTarget struct {
-	cfg       config.WriteTargetConfig
-	cell      *cell
-	client    remote.Client
-	lastValue interface{}
-	lastWrite time.Time
+	cfg          config.WriteTargetConfig
+	cell         *cell
+	client       remote.Client
+	lastValue    interface{}
+	lastWrite    time.Time
+	mu           sync.RWMutex
+	disabled     atomic.Bool
+	lastDuration time.Duration
+	lastAttempt  time.Time
 }
 
 func newWriteTargets(cfgs []config.WriteTargetConfig, cells *cellStore) ([]*writeTarget, error) {
@@ -33,7 +39,9 @@ func newWriteTargets(cfgs []config.WriteTargetConfig, cells *cellStore) ([]*writ
 		if err != nil {
 			return nil, fmt.Errorf("write target %s: %w", cfg.ID, err)
 		}
-		targets = append(targets, &writeTarget{cfg: cfg, cell: cell})
+		target := &writeTarget{cfg: cfg, cell: cell}
+		target.disabled.Store(cfg.Disable)
+		targets = append(targets, target)
 	}
 	sortTargets(targets)
 	return targets, nil
@@ -59,6 +67,9 @@ func shouldPrecede(a, b *writeTarget) bool {
 }
 
 func (t *writeTarget) commit(now time.Time, factory remote.ClientFactory, logger zerolog.Logger) int {
+	if t.disabled.Load() {
+		return 0
+	}
 	errors := 0
 	logger.Trace().Str("target", t.cfg.ID).Msg("write target evaluation started")
 	if t.cell == nil {
@@ -70,8 +81,9 @@ func (t *writeTarget) commit(now time.Time, factory remote.ClientFactory, logger
 		return 0
 	}
 
-	if limit := t.cfg.RateLimit.Duration; limit > 0 && !t.lastWrite.IsZero() {
-		if now.Before(t.lastWrite.Add(limit)) {
+	lastWrite := t.lastWriteTime()
+	if limit := t.cfg.RateLimit.Duration; limit > 0 && !lastWrite.IsZero() {
+		if now.Before(lastWrite.Add(limit)) {
 			logger.Trace().Str("target", t.cfg.ID).Dur("rate_limit", limit).Msg("skipping due to rate limit")
 			return 0
 		}
@@ -89,33 +101,39 @@ func (t *writeTarget) commit(now time.Time, factory remote.ClientFactory, logger
 	if err != nil {
 		t.closeClient()
 		logger.Error().Err(err).Str("target", t.cfg.ID).Msg("write client unavailable")
+		t.recordAttempt(now, 0)
 		return 1
 	}
 
+	start := time.Now()
 	if err := t.performWrite(client, current); err != nil {
 		t.closeClient()
 		logger.Error().Err(err).Str("target", t.cfg.ID).Msg("modbus write failed")
+		t.recordAttempt(now, time.Since(start))
 		return 1
 	}
 
-	t.lastValue = cloneValue(current)
-	t.lastWrite = now
-	logger.Trace().Str("target", t.cfg.ID).Time("timestamp", now).Msg("write target committed")
+	duration := time.Since(start)
+	t.updateAfterWrite(current, now, duration)
+	logger.Trace().Str("target", t.cfg.ID).Time("timestamp", now).Dur("duration", duration).Msg("write target committed")
 	return errors
 }
 
 func (t *writeTarget) shouldWrite(value interface{}) bool {
-	if t.lastValue == nil {
+	t.mu.RLock()
+	lastValue := cloneValue(t.lastValue)
+	t.mu.RUnlock()
+	if lastValue == nil {
 		return true
 	}
 	switch t.cell.cfg.Type {
 	case config.ValueKindBool:
-		return value != t.lastValue
+		return value != lastValue
 	case config.ValueKindString:
-		return value != t.lastValue
+		return value != lastValue
 	case config.ValueKindNumber:
 		current := value.(float64)
-		previous, ok := t.lastValue.(float64)
+		previous, ok := lastValue.(float64)
 		if !ok {
 			return true
 		}
@@ -127,6 +145,28 @@ func (t *writeTarget) shouldWrite(value interface{}) bool {
 	default:
 		return true
 	}
+}
+
+func (t *writeTarget) lastWriteTime() time.Time {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.lastWrite
+}
+
+func (t *writeTarget) updateAfterWrite(value interface{}, ts time.Time, duration time.Duration) {
+	t.mu.Lock()
+	t.lastValue = cloneValue(value)
+	t.lastWrite = ts
+	t.lastAttempt = ts
+	t.lastDuration = duration
+	t.mu.Unlock()
+}
+
+func (t *writeTarget) recordAttempt(ts time.Time, duration time.Duration) {
+	t.mu.Lock()
+	t.lastAttempt = ts
+	t.lastDuration = duration
+	t.mu.Unlock()
 }
 
 func (t *writeTarget) ensureClient(factory remote.ClientFactory) (remote.Client, error) {
@@ -197,4 +237,32 @@ func (t *writeTarget) closeClient() {
 	}
 	_ = t.client.Close()
 	t.client = nil
+}
+
+func (t *writeTarget) setDisabled(disabled bool) {
+	t.disabled.Store(disabled)
+	if disabled {
+		t.mu.Lock()
+		t.lastAttempt = time.Time{}
+		t.lastDuration = 0
+		t.mu.Unlock()
+	}
+}
+
+func (t *writeTarget) status() writeTargetStatus {
+	t.mu.RLock()
+	lastWrite := t.lastWrite
+	lastAttempt := t.lastAttempt
+	lastDuration := t.lastDuration
+	t.mu.RUnlock()
+	return writeTargetStatus{
+		ID:           t.cfg.ID,
+		Cell:         t.cfg.Cell,
+		Function:     t.cfg.Function,
+		Address:      t.cfg.Address,
+		Disabled:     t.disabled.Load(),
+		LastWrite:    lastWrite,
+		LastAttempt:  lastAttempt,
+		LastDuration: lastDuration,
+	}
 }

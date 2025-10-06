@@ -93,6 +93,7 @@ type ReadGroupConfig struct {
 	Length   uint16             `yaml:"length"`
 	TTL      Duration           `yaml:"ttl"`
 	Signals  []ReadSignalConfig `yaml:"signals"`
+	Disable  bool               `yaml:"disable,omitempty"`
 }
 
 // WriteTargetConfig describes how a cell is pushed to Modbus.
@@ -108,6 +109,7 @@ type WriteTargetConfig struct {
 	Deadband   float64        `yaml:"deadband,omitempty"`
 	RateLimit  Duration       `yaml:"rate_limit,omitempty"`
 	Priority   int            `yaml:"priority,omitempty"`
+	Disable    bool           `yaml:"disable,omitempty"`
 }
 
 // ProgramSignalConfig maps a program signal onto a cell.
@@ -133,6 +135,8 @@ type ProgramConfig struct {
 type DependencyConfig struct {
 	Cell string    `yaml:"cell"`
 	Type ValueKind `yaml:"type"`
+	// Threshold defines the minimum delta that should trigger a logic re-evaluation for numeric values.
+	Threshold float64 `yaml:"threshold,omitempty"`
 }
 
 // LogicBlockConfig describes a single logic evaluation block.

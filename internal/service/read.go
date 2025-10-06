@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -18,10 +20,14 @@ type readSignal struct {
 }
 
 type readGroup struct {
-	cfg     config.ReadGroupConfig
-	signals []readSignal
-	next    time.Time
-	client  remote.Client
+	cfg          config.ReadGroupConfig
+	signals      []readSignal
+	next         time.Time
+	client       remote.Client
+	mu           sync.RWMutex
+	disabled     atomic.Bool
+	lastRun      time.Time
+	lastDuration time.Duration
 }
 
 func newReadGroups(cfgs []config.ReadGroupConfig, cells *cellStore) ([]*readGroup, error) {
@@ -37,6 +43,7 @@ func newReadGroups(cfgs []config.ReadGroupConfig, cells *cellStore) ([]*readGrou
 			return nil, fmt.Errorf("read group %s missing function", cfg.ID)
 		}
 		group := &readGroup{cfg: cfg}
+		group.disabled.Store(cfg.Disable)
 		for _, sigCfg := range cfg.Signals {
 			cell, err := cells.mustGet(sigCfg.Cell)
 			if err != nil {
@@ -56,28 +63,40 @@ func newReadGroups(cfgs []config.ReadGroupConfig, cells *cellStore) ([]*readGrou
 }
 
 func (g *readGroup) due(now time.Time) bool {
+	if g.disabled.Load() {
+		return false
+	}
 	ttl := g.cfg.TTL.Duration
 	if ttl <= 0 {
 		return true
 	}
-	if g.next.IsZero() {
+	g.mu.RLock()
+	next := g.next
+	g.mu.RUnlock()
+	if next.IsZero() {
 		return true
 	}
-	return !now.Before(g.next)
+	return !now.Before(next)
 }
 
 func (g *readGroup) perform(now time.Time, factory remote.ClientFactory, logger zerolog.Logger) int {
+	if g.disabled.Load() {
+		return 0
+	}
 	errors := 0
 	ttl := g.cfg.TTL.Duration
 	if ttl <= 0 {
 		ttl = 0
 	}
+	g.mu.Lock()
 	g.next = now.Add(ttl)
+	g.mu.Unlock()
 
 	if len(g.signals) == 0 {
 		return 0
 	}
 
+	start := time.Now()
 	logger.Trace().Str("group", g.cfg.ID).Str("function", strings.ToLower(g.cfg.Function)).Uint16("start", g.cfg.Start).Uint16("length", g.cfg.Length).Msg("read group scheduled")
 
 	if g.client == nil {
@@ -106,7 +125,12 @@ func (g *readGroup) perform(now time.Time, factory remote.ClientFactory, logger 
 			errors++
 		}
 	}
-	logger.Trace().Str("group", g.cfg.ID).Int("signals", len(g.signals)).Msg("read group completed")
+	duration := time.Since(start)
+	g.mu.Lock()
+	g.lastRun = now
+	g.lastDuration = duration
+	g.mu.Unlock()
+	logger.Trace().Str("group", g.cfg.ID).Int("signals", len(g.signals)).Dur("duration", duration).Msg("read group completed")
 	return errors
 }
 
@@ -143,6 +167,33 @@ func (g *readGroup) read(client remote.Client) ([]byte, error) {
 func (g *readGroup) invalidateAll(ts time.Time, code, message string) {
 	for _, sig := range g.signals {
 		sig.cell.markInvalid(ts, code, message)
+	}
+}
+
+func (g *readGroup) setDisabled(disabled bool) {
+	g.disabled.Store(disabled)
+	if disabled {
+		g.mu.Lock()
+		g.next = time.Time{}
+		g.mu.Unlock()
+	}
+}
+
+func (g *readGroup) status() readGroupStatus {
+	g.mu.RLock()
+	next := g.next
+	lastRun := g.lastRun
+	lastDuration := g.lastDuration
+	g.mu.RUnlock()
+	return readGroupStatus{
+		ID:           g.cfg.ID,
+		Function:     g.cfg.Function,
+		Start:        g.cfg.Start,
+		Length:       g.cfg.Length,
+		Disabled:     g.disabled.Load(),
+		NextRun:      next,
+		LastRun:      lastRun,
+		LastDuration: lastDuration,
 	}
 }
 
