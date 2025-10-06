@@ -1,0 +1,22 @@
+cells:
+  - id: ctu_pulse
+    type: bool
+    constant: true
+  - id: ctu_value
+    type: number
+  - id: ctu_done
+    type: bool
+programs:
+  - id: ctu_counter
+    type: ctu
+    inputs:
+      - cell: ctu_pulse
+        id: cu
+    outputs:
+      - cell: ctu_value
+        id: value
+      - cell: ctu_done
+        id: done
+    settings:
+      preset: 3
+      max: 10

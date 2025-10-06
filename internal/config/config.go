@@ -97,8 +97,8 @@ type ReadGroupConfig struct {
 
 // WriteTargetConfig describes how a cell is pushed to Modbus.
 type WriteTargetConfig struct {
-	ID         string         `yaml:"id"`
-	Cell       string         `yaml:"cell"`
+        ID         string         `yaml:"id"`
+        Cell       string         `yaml:"cell"`
 	Endpoint   EndpointConfig `yaml:"endpoint"`
 	Function   string         `yaml:"function"`
 	Address    uint16         `yaml:"address"`
@@ -108,6 +108,25 @@ type WriteTargetConfig struct {
 	Deadband   float64        `yaml:"deadband,omitempty"`
 	RateLimit  Duration       `yaml:"rate_limit,omitempty"`
 	Priority   int            `yaml:"priority,omitempty"`
+}
+
+// ProgramSignalConfig maps a program signal onto a cell.
+type ProgramSignalConfig struct {
+        ID       string      `yaml:"id"`
+        Cell     string      `yaml:"cell"`
+        Type     ValueKind   `yaml:"type,omitempty"`
+        Optional bool        `yaml:"optional,omitempty"`
+        Default  interface{} `yaml:"default,omitempty"`
+}
+
+// ProgramConfig describes a reusable processing module.
+type ProgramConfig struct {
+        ID       string                `yaml:"id"`
+        Type     string                `yaml:"type"`
+        Inputs   []ProgramSignalConfig `yaml:"inputs,omitempty"`
+        Outputs  []ProgramSignalConfig `yaml:"outputs,omitempty"`
+        Settings map[string]interface{} `yaml:"settings,omitempty"`
+        Metadata yaml.Node             `yaml:"metadata,omitempty"`
 }
 
 // DependencyConfig describes a dependency for a logic block.
@@ -179,11 +198,12 @@ type ServerConfig struct {
 
 // Config is the root configuration structure for the service.
 type Config struct {
-	Cycle    Duration               `yaml:"cycle"`
-	Logging  LoggingConfig          `yaml:"logging"`
-	Modules  []string               `yaml:"modules"`
-	Cells    []CellConfig           `yaml:"cells"`
-	Reads    []ReadGroupConfig      `yaml:"reads"`
+        Cycle    Duration               `yaml:"cycle"`
+        Logging  LoggingConfig          `yaml:"logging"`
+        Modules  []string               `yaml:"modules"`
+        Programs []ProgramConfig        `yaml:"programs,omitempty"`
+        Cells    []CellConfig           `yaml:"cells"`
+        Reads    []ReadGroupConfig      `yaml:"reads"`
 	Writes   []WriteTargetConfig    `yaml:"writes"`
 	Logic    []LogicBlockConfig     `yaml:"logic"`
 	DSL      DSLConfig              `yaml:"dsl"`
@@ -331,8 +351,9 @@ func mergeConfig(dst, src *Config) {
 		dst.Server = src.Server
 	}
 
-	dst.Cells = append(dst.Cells, src.Cells...)
-	dst.Reads = append(dst.Reads, src.Reads...)
-	dst.Writes = append(dst.Writes, src.Writes...)
-	dst.Logic = append(dst.Logic, src.Logic...)
+        dst.Programs = append(dst.Programs, src.Programs...)
+        dst.Cells = append(dst.Cells, src.Cells...)
+        dst.Reads = append(dst.Reads, src.Reads...)
+        dst.Writes = append(dst.Writes, src.Writes...)
+        dst.Logic = append(dst.Logic, src.Logic...)
 }

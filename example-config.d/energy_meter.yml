@@ -1,0 +1,22 @@
+cells:
+  - id: energy_power
+    type: number
+    unit: kW
+    constant: 5
+  - id: energy_enable
+    type: bool
+    constant: true
+  - id: energy_total
+    type: number
+    unit: kWh
+programs:
+  - id: energy_meter_example
+    type: energy_meter
+    inputs:
+      - cell: energy_power
+        id: power
+      - cell: energy_enable
+        id: enable
+    outputs:
+      - cell: energy_total
+        id: energy

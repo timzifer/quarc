@@ -1,11 +1,12 @@
 # Modbus Processor
 
-A deterministic, cyclic Modbus controller that executes three strictly separated phases – **READ**, **EVAL** and **COMMIT** – on a fixed schedule. The controller ingests Modbus registers in blocks, stores them in typed in-memory cells, evaluates expression-based logic (normal and fallback ASTs) and finally commits changes back to Modbus targets using a write-on-change strategy.
+A deterministic, cyclic Modbus controller that executes four strictly separated phases – **READ**, **PROGRAM**, **EVAL** and **COMMIT** – on a fixed schedule. The controller ingests Modbus registers in blocks, stores them in typed in-memory cells, lets reusable control programs derive new signals, evaluates expression-based logic (normal and fallback ASTs) and finally commits changes back to Modbus targets using a write-on-change strategy.
 
 ## Architecture
 
 * **Cells** – Typed storage units (`number`, `bool`, `string`) with a binary validity flag. Optional diagnostics (error code, message, timestamp) are attached when reads, evaluations or writes fail. Only the validity flag is considered during logic execution.
 * **Read phase** – Groups Modbus reads by slave/function/range. Each group has an individual TTL; groups that expired during the current cycle are re-polled. Raw bytes are marshalled into typed cell values using the configured endianness, signedness and scaling. Read failures only invalidate the affected cells – the rest of the cycle continues.
+* **Program phase** – Executes reusable control modules that consume existing cell snapshots and emit additional signals. Programs are instantiated from the registry, receive cycle timing information and may produce diagnostics when mandatory outputs are missing or invalid.
 * **Eval phase** – Runs normal ASTs in a deterministic order derived from the declared dependency graph (topological sort with configuration order as tie breaker). Every block operates on a consistent snapshot of the cell state. When dependencies are invalid or the normal AST explicitly triggers `fallback()`, the fallback AST is executed. Logic blocks emit exactly one target cell value via `success(value)`.
 * **Commit phase** – Writes only the cells that changed beyond the configured deadband/rate limits. Writes are ordered by priority. Marshalling is performed in reverse (typed value → bytes). Failures raise diagnostics but never abort the cycle.
 
@@ -43,6 +44,7 @@ Configuration is provided as YAML (see [`config.example.yaml`](config.example.ya
 
 * `cycle` – Global cycle time.
 * `modules` – Optional list of additional YAML snippets to load (relative to the parent file). The loader also accepts directories, processing all `*.yaml`/`*.yml` files in lexical order, which makes `config.d`-style setups trivial.
+* `programs` – Reusable control modules with typed input/output bindings that execute between the read and logic phases.
 * `cells` – Definitions of all local memory cells.
 * `reads` – Modbus block reads (slave endpoint, function, address range, TTL and signal mapping into cells).
 * `logic` – Logic blocks with normal/fallback ASTs and a target cell. Dependencies are automatically discovered from the expressions.
@@ -59,15 +61,30 @@ logic:
     normal: |
       success(
         !value("heater_enabled") ? false :
-        value("temperature_c") < 18 ? true :
-        value("temperature_c") > 21 ? false :
+        value("alarm_state") ? false :
+        value("pid_output") >= 60 ? true :
+        value("pid_output") <= 40 ? false :
         fallback()
       )
     fallback: |
-      success(valid("temperature_c") ? false : fail("logic.dependency", "temperature unavailable"))
+      success(
+        valid("pid_output") ? value("pid_output") > 50 :
+        fail("logic.dependency", "pid output unavailable")
+      )
 ```
 
-See the full [`config.example.yaml`](config.example.yaml) for a complete configuration including reads and writes.
+See the full [`config.example.yaml`](config.example.yaml) for a complete configuration including reads, programs and writes. The configuration loads every module in [`example-config.d`](example-config.d) to showcase each built-in program with runnable input/output bindings.
+
+### Reusable programs
+
+Programs encapsulate common control algorithms such as PID regulators, ramp generators, slew limiters, timers, counters, filters, selection logic, latches, runtime/energy tracking, sequencers and alarm supervision. Each entry in the `programs` list declares:
+
+* `id` – Unique instance identifier referenced by diagnostics.
+* `type` – Program factory key (e.g. `pid`, `ramp`, `slew_asym`).
+* `inputs` / `outputs` – Mappings from program signal names to cell IDs. Optional signals can define defaults and type overrides.
+* `settings` – Arbitrary key/value map forwarded to the program factory for tuning parameters.
+
+Programs run before logic evaluation and write directly into the associated cells, making their results available to downstream logic blocks, Modbus writes and the embedded server. Refer to the files in [`example-config.d`](example-config.d) for concrete YAML fragments covering every bundled program.
 
 ### Splitting configuration files
 
@@ -77,7 +94,7 @@ Use the `modules` directive to include additional YAML documents from the main c
 
 When `server.enabled` is `true`, the processor starts an integrated Modbus/TCP server. Cells mapped in `server.cells` are exposed as input registers, making the current controller state available to external systems. Numeric cells are scaled according to the provided `scale` factor and can be marked as signed, while boolean cells are exported as 0/1 values.
 
-Trace level logging now provides detailed insights into each READ/EVAL/COMMIT step, including the Modbus server update cycle.
+Trace level logging now provides detailed insights into each READ/PROGRAM/EVAL/COMMIT step, including the Modbus server update cycle.
 
 ## Running
 

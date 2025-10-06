@@ -164,6 +164,69 @@ func TestDeterministicCycle(t *testing.T) {
 	}
 }
 
+func TestProgramsExecuteBeforeLogic(t *testing.T) {
+	cfg := &config.Config{
+		Cycle: config.Duration{Duration: time.Millisecond},
+		Cells: []config.CellConfig{
+			{ID: "target", Type: config.ValueKindNumber, Constant: 10.0},
+			{ID: "processed", Type: config.ValueKindNumber},
+			{ID: "result", Type: config.ValueKindNumber},
+		},
+		Programs: []config.ProgramConfig{
+			{
+				ID:   "ramp_test",
+				Type: "ramp",
+				Inputs: []config.ProgramSignalConfig{{
+					ID:   "target",
+					Cell: "target",
+				}},
+				Outputs: []config.ProgramSignalConfig{{
+					ID:   "value",
+					Cell: "processed",
+				}},
+				Settings: map[string]interface{}{"rate": 100.0},
+			},
+		},
+		Logic: []config.LogicBlockConfig{
+			{
+				ID:     "logic",
+				Target: "result",
+				Normal: "success(value(\"processed\") * 2)",
+			},
+		},
+	}
+
+	logger := zerolog.New(io.Discard)
+	svc, err := New(cfg, logger, func(config.EndpointConfig) (remote.Client, error) {
+		return &fakeClient{}, nil
+	})
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	defer svc.Close()
+
+	if err := svc.IterateOnce(context.Background(), time.Now()); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+
+	metrics := svc.Metrics()
+	if metrics.LastProgramErrors != 0 {
+		t.Fatalf("unexpected program errors: %+v", metrics)
+	}
+
+	snap := svc.CellSnapshot()
+	if cell := snap["processed"]; cell == nil || !cell.Valid {
+		t.Fatalf("processed cell invalid: %+v", cell)
+	} else if got, ok := cell.Value.(float64); !ok || got != 10 {
+		t.Fatalf("expected processed=10, got %v", cell.Value)
+	}
+	if cell := snap["result"]; cell == nil || !cell.Valid {
+		t.Fatalf("result cell invalid: %+v", cell)
+	} else if got, ok := cell.Value.(float64); !ok || got != 20 {
+		t.Fatalf("expected result=20, got %v", cell.Value)
+	}
+}
+
 func TestFallbackExecutedOnInvalidDependency(t *testing.T) {
 	cfg := &config.Config{
 		Cycle: config.Duration{Duration: time.Millisecond},

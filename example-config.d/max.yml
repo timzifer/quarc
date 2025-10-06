@@ -1,0 +1,22 @@
+cells:
+  - id: max_a
+    type: number
+    constant: 12
+  - id: max_b
+    type: number
+    constant: 8
+  - id: max_value
+    type: number
+programs:
+  - id: max_selector
+    type: max
+    inputs:
+      - cell: max_a
+        id: a
+      - cell: max_b
+        id: b
+    outputs:
+      - cell: max_value
+        id: value
+    settings:
+      inputs: [a, b]

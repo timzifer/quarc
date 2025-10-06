@@ -2,6 +2,8 @@ cycle: 500ms
 logging:
   level: info
   format: text
+modules:
+  - example-config.d
 dsl:
   allow_if_blocks: true
 helpers:
@@ -24,7 +26,7 @@ cells:
     unit: "°C"
   - id: heater_enabled
     type: bool
-    constant: false
+    constant: true
   - id: heater_command
     type: bool
 reads:
@@ -58,20 +60,38 @@ logic:
       success(value("raw_temperature"))
     fallback: |
       success(0)
+  - id: pid_setpoint_schedule
+    target: pid_setpoint
+    normal: |
+      success(
+        value("sequencer_active") == "Heat" ? 65 :
+        value("sequencer_active") == "Hold" ? 60 :
+        value("sequencer_active") == "Drain" ? 45 :
+        50
+      )
+    fallback: |
+      success(50)
+  - id: pid_measurement_feedback
+    target: pid_process
+    normal: |
+      success(value("temperature_c"))
+    fallback: |
+      success(valid("temperature_c") ? value("temperature_c") : fail("logic.dependency", "temperature unavailable"))
   - id: heater_control
     target: heater_command
     normal: |
-      success(if value("heater_enabled") {
+      success(
+        !value("heater_enabled") ? false :
+        value("alarm_state") ? false :
+        value("pid_output") >= 60 ? true :
+        value("pid_output") <= 40 ? false :
         fallback()
-      } else if value("temperature_c") < 18 {
-        true
-      } else if value("temperature_c") > 21 {
-        false
-      } else {
-        fallback()
-      })
+      )
     fallback: |
-      success(valid("temperature_c") ? false : fail("logic.dependency", "temperature unavailable"))
+      success(
+        valid("pid_output") ? value("pid_output") > 50 :
+        fail("logic.dependency", "pid output unavailable")
+      )
 server:
   enabled: true
   listen: ":15020"

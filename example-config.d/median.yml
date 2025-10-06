@@ -1,0 +1,17 @@
+cells:
+  - id: median_input
+    type: number
+    constant: 5
+  - id: median_output
+    type: number
+programs:
+  - id: median_filter
+    type: median
+    inputs:
+      - cell: median_input
+        id: input
+    outputs:
+      - cell: median_output
+        id: output
+    settings:
+      window: 5
