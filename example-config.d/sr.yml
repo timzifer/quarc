@@ -1,0 +1,22 @@
+cells:
+  - id: sr_set
+    type: bool
+    constant: true
+  - id: sr_reset
+    type: bool
+    constant: false
+  - id: sr_q
+    type: bool
+programs:
+  - id: sr_latch
+    type: sr
+    inputs:
+      - cell: sr_set
+        id: set
+      - cell: sr_reset
+        id: reset
+    outputs:
+      - cell: sr_q
+        id: q
+    settings:
+      initial: false

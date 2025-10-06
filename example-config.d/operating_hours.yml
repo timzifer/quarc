@@ -1,0 +1,16 @@
+cells:
+  - id: operating_run
+    type: bool
+    constant: true
+  - id: operating_hours_total
+    type: number
+    unit: h
+programs:
+  - id: operating_hours_tracker
+    type: operating_hours
+    inputs:
+      - cell: operating_run
+        id: run
+    outputs:
+      - cell: operating_hours_total
+        id: hours

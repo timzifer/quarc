@@ -1,0 +1,22 @@
+cells:
+  - id: tof_input
+    type: bool
+    constant: false
+  - id: tof_q
+    type: bool
+  - id: tof_elapsed
+    type: number
+    unit: s
+programs:
+  - id: tof_off_delay
+    type: tof
+    inputs:
+      - cell: tof_input
+        id: in
+    outputs:
+      - cell: tof_q
+        id: q
+      - cell: tof_elapsed
+        id: elapsed
+    settings:
+      preset: 1.5s

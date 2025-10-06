@@ -1,0 +1,30 @@
+cells:
+  - id: pid_setpoint
+    type: number
+    unit: "°C"
+    constant: 40
+  - id: pid_process
+    type: number
+    unit: "°C"
+    constant: 35
+  - id: pid_output
+    type: number
+    unit: "%"
+programs:
+  - id: pid_temperature_controller
+    type: pid
+    inputs:
+      - cell: pid_setpoint
+        id: setpoint
+      - cell: pid_process
+        id: process
+    outputs:
+      - cell: pid_output
+        id: output
+    settings:
+      kp: 2.0
+      ki: 0.5
+      kd: 0.1
+      bias: 10
+      min: 0
+      max: 100

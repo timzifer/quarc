@@ -17,23 +17,26 @@ type Service struct {
 	logger        zerolog.Logger
 	clientFactory remote.ClientFactory
 
-	cells   *cellStore
-	reads   []*readGroup
-	logic   []*logicBlock
-	ordered []*logicBlock
-	writes  []*writeTarget
-	server  *modbusServer
+	cells    *cellStore
+	reads    []*readGroup
+	logic    []*logicBlock
+	ordered  []*logicBlock
+	writes   []*writeTarget
+	server   *modbusServer
+	programs []*programBinding
 
-	cycle   time.Duration
-	metrics metrics
+	cycle         time.Duration
+	metrics       metrics
+	lastCycleTime time.Time
 }
 
 type metrics struct {
-	CycleCount      uint64
-	LastDuration    time.Duration
-	LastReadErrors  int
-	LastEvalErrors  int
-	LastWriteErrors int
+	CycleCount        uint64
+	LastDuration      time.Duration
+	LastReadErrors    int
+	LastProgramErrors int
+	LastEvalErrors    int
+	LastWriteErrors   int
 }
 
 // New builds a service from configuration and dependencies.
@@ -57,6 +60,10 @@ func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory
 		return nil, err
 	}
 	logic, ordered, err := newLogicBlocks(cfg.Logic, cells, dsl, logger)
+	if err != nil {
+		return nil, err
+	}
+	programs, err := newProgramBindings(cfg.Programs, cells, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -85,6 +92,9 @@ func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory
 		server:        srv,
 		cycle:         cfg.CycleInterval(),
 	}
+	if len(programs) > 0 {
+		svc.programs = programs
+	}
 	return svc, nil
 }
 
@@ -106,6 +116,9 @@ func Validate(cfg *config.Config, logger zerolog.Logger) error {
 		return err
 	}
 	if _, _, err := newLogicBlocks(cfg.Logic, cells, dsl, logger); err != nil {
+		return err
+	}
+	if _, err := newProgramBindings(cfg.Programs, cells, logger); err != nil {
 		return err
 	}
 	if _, err := newWriteTargets(cfg.Writes, cells); err != nil {
@@ -140,6 +153,7 @@ func (s *Service) Run(ctx context.Context) error {
 func (s *Service) IterateOnce(ctx context.Context, now time.Time) error {
 	start := time.Now()
 	readErrors := s.readPhase(now)
+	programErrors := s.programPhase(now)
 	snapshot := s.cells.snapshot()
 	evalErrors := s.evalPhase(now, snapshot)
 	writeErrors := s.commitPhase(ctx, now)
@@ -148,8 +162,10 @@ func (s *Service) IterateOnce(ctx context.Context, now time.Time) error {
 	s.metrics.CycleCount++
 	s.metrics.LastDuration = time.Since(start)
 	s.metrics.LastReadErrors = readErrors
+	s.metrics.LastProgramErrors = programErrors
 	s.metrics.LastEvalErrors = evalErrors
 	s.metrics.LastWriteErrors = writeErrors
+	s.lastCycleTime = now
 	return nil
 }
 

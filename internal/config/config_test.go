@@ -7,9 +7,9 @@ import (
 )
 
 func TestLoadModules(t *testing.T) {
-	dir := t.TempDir()
-	mainPath := filepath.Join(dir, "config.yaml")
-	modulePath := filepath.Join(dir, "module.yaml")
+        dir := t.TempDir()
+        mainPath := filepath.Join(dir, "config.yaml")
+        modulePath := filepath.Join(dir, "module.yaml")
 
 	if err := os.WriteFile(modulePath, []byte(`cells:
   - id: extra
@@ -34,9 +34,52 @@ cells:
 		t.Fatalf("load: %v", err)
 	}
 
-	if len(cfg.Cells) != 2 {
-		t.Fatalf("expected 2 cells, got %d", len(cfg.Cells))
-	}
+        if len(cfg.Cells) != 2 {
+                t.Fatalf("expected 2 cells, got %d", len(cfg.Cells))
+        }
+}
+
+func TestLoadPrograms(t *testing.T) {
+        dir := t.TempDir()
+        path := filepath.Join(dir, "config.yaml")
+
+        content := `programs:
+  - id: ramp1
+    type: ramp
+    inputs:
+      - id: target
+        cell: c1
+    outputs:
+      - id: value
+        cell: c2
+    settings:
+      rate: 1.5
+cells:
+  - id: c1
+    type: number
+  - id: c2
+    type: number
+`
+
+        if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+                t.Fatalf("write: %v", err)
+        }
+
+        cfg, err := Load(path)
+        if err != nil {
+                t.Fatalf("load: %v", err)
+        }
+
+        if len(cfg.Programs) != 1 {
+                t.Fatalf("expected 1 program, got %d", len(cfg.Programs))
+        }
+        prog := cfg.Programs[0]
+        if prog.ID != "ramp1" || prog.Type != "ramp" {
+                t.Fatalf("unexpected program config: %+v", prog)
+        }
+        if prog.Settings["rate"].(float64) != 1.5 {
+                t.Fatalf("expected rate 1.5, got %v", prog.Settings["rate"])
+        }
 }
 
 func TestLoadDirectory(t *testing.T) {

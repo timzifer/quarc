@@ -1,0 +1,19 @@
+cells:
+  - id: slew_asym_input
+    type: number
+    constant: 5
+  - id: slew_asym_output
+    type: number
+programs:
+  - id: slew_asym_rate_limiter
+    type: slew_asym
+    inputs:
+      - cell: slew_asym_input
+        id: input
+    outputs:
+      - cell: slew_asym_output
+        id: output
+    settings:
+      rise_rate: 4
+      fall_rate: 1.5
+      initial: 0

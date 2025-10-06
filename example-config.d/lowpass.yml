@@ -1,0 +1,17 @@
+cells:
+  - id: lowpass_input
+    type: number
+    constant: 6
+  - id: lowpass_output
+    type: number
+programs:
+  - id: lowpass_filter
+    type: lowpass
+    inputs:
+      - cell: lowpass_input
+        id: input
+    outputs:
+      - cell: lowpass_output
+        id: output
+    settings:
+      alpha: 0.3

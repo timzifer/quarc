@@ -1,0 +1,29 @@
+cells:
+  - id: ctud_cu
+    type: bool
+    constant: true
+  - id: ctud_cd
+    type: bool
+    constant: false
+  - id: ctud_value
+    type: number
+  - id: ctud_done
+    type: bool
+programs:
+  - id: ctud_counter
+    type: ctud
+    inputs:
+      - cell: ctud_cu
+        id: cu
+      - cell: ctud_cd
+        id: cd
+    outputs:
+      - cell: ctud_value
+        id: value
+      - cell: ctud_done
+        id: done
+    settings:
+      initial: 2
+      preset: 4
+      min: 0
+      max: 10

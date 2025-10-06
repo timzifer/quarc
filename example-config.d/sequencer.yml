@@ -1,0 +1,31 @@
+cells:
+  - id: sequencer_advance
+    type: bool
+    constant: true
+  - id: sequencer_reset
+    type: bool
+    constant: false
+  - id: sequencer_active
+    type: string
+  - id: sequencer_step
+    type: number
+  - id: sequencer_done
+    type: bool
+programs:
+  - id: sequencer_example
+    type: sequencer
+    inputs:
+      - cell: sequencer_advance
+        id: advance
+      - cell: sequencer_reset
+        id: reset
+    outputs:
+      - cell: sequencer_active
+        id: active
+      - cell: sequencer_step
+        id: step
+      - cell: sequencer_done
+        id: done
+    settings:
+      steps: [Fill, Heat, Hold, Drain]
+      wrap: false

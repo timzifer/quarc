@@ -1,0 +1,23 @@
+cells:
+  - id: ctd_pulse
+    type: bool
+    constant: true
+  - id: ctd_value
+    type: number
+  - id: ctd_done
+    type: bool
+programs:
+  - id: ctd_counter
+    type: ctd
+    inputs:
+      - cell: ctd_pulse
+        id: cd
+    outputs:
+      - cell: ctd_value
+        id: value
+      - cell: ctd_done
+        id: done
+    settings:
+      initial: 5
+      preset: 0
+      min: 0

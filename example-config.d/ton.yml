@@ -1,0 +1,22 @@
+cells:
+  - id: ton_input
+    type: bool
+    constant: true
+  - id: ton_q
+    type: bool
+  - id: ton_elapsed
+    type: number
+    unit: s
+programs:
+  - id: ton_delay
+    type: ton
+    inputs:
+      - cell: ton_input
+        id: in
+    outputs:
+      - cell: ton_q
+        id: q
+      - cell: ton_elapsed
+        id: elapsed
+    settings:
+      preset: 2s

@@ -1,0 +1,19 @@
+cells:
+  - id: hysteresis_input
+    type: number
+    constant: 3.5
+  - id: hysteresis_state
+    type: bool
+programs:
+  - id: hysteresis_example
+    type: hysteresis
+    inputs:
+      - cell: hysteresis_input
+        id: value
+    outputs:
+      - cell: hysteresis_state
+        id: state
+    settings:
+      low: 2.5
+      high: 4.0
+      initial: false
