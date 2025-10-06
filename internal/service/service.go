@@ -89,6 +89,7 @@ type readGroupStatus struct {
 	NextRun      time.Time
 	LastRun      time.Time
 	LastDuration time.Duration
+	Source       config.ModuleReference
 }
 
 type writeTargetStatus struct {
@@ -100,12 +101,14 @@ type writeTargetStatus struct {
 	LastWrite    time.Time
 	LastAttempt  time.Time
 	LastDuration time.Duration
+	Source       config.ModuleReference
 }
 
 type logicBlockState struct {
 	ID      string
 	Target  string
 	Metrics logicMetricsSnapshot
+	Source  config.ModuleReference
 }
 
 func newWorkerSlots(cfg config.WorkerSlots) workerSlots {
@@ -501,7 +504,7 @@ func (s *Service) WriteStatuses() []writeTargetStatus {
 func (s *Service) LogicStates() []logicBlockState {
 	states := make([]logicBlockState, 0, len(s.logic))
 	for _, block := range s.logic {
-		states = append(states, logicBlockState{ID: block.cfg.ID, Target: block.cfg.Target, Metrics: block.metricsSnapshot()})
+		states = append(states, logicBlockState{ID: block.cfg.ID, Target: block.cfg.Target, Metrics: block.metricsSnapshot(), Source: block.cfg.Source})
 	}
 	sort.Slice(states, func(i, j int) bool { return states[i].ID < states[j].ID })
 	return states
