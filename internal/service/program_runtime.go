@@ -185,7 +185,7 @@ func (s *Service) programPhase(now time.Time, snapshot map[string]*snapshotValue
 	}
 	ctx := programs.Context{Now: now, Delta: s.delta(now)}
 	slots := s.workers.programSlot()
-	errors, _ := runWorkerPool(context.Background(), slots, s.programs, func(_ context.Context, binding *programBinding) int {
+	errors, _ := runWorkersWithLoad(context.Background(), &s.load.program, slots, s.programs, func(_ context.Context, binding *programBinding) int {
 		inputs := binding.prepareInputs(snapshot)
 		outputs, err := binding.program.Execute(ctx, inputs)
 		if err != nil {
