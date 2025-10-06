@@ -1,4 +1,4 @@
-package service
+package modbus
 
 import (
 	"fmt"
@@ -12,61 +12,56 @@ import (
 
 	"modbus_processor/internal/config"
 	"modbus_processor/internal/remote"
+	serviceio "modbus_processor/internal/service/io"
 )
 
 type writeTarget struct {
-	cfg          config.WriteTargetConfig
-	cell         *cell
-	client       remote.Client
-	lastValue    interface{}
-	lastWrite    time.Time
-	mu           sync.RWMutex
-	disabled     atomic.Bool
-	lastDuration time.Duration
-	lastAttempt  time.Time
+	cfg           config.WriteTargetConfig
+	cell          serviceio.Cell
+	clientFactory remote.ClientFactory
+	client        remote.Client
+	lastValue     interface{}
+	lastWrite     time.Time
+	mu            sync.RWMutex
+	disabled      atomic.Bool
+	lastDuration  time.Duration
+	lastAttempt   time.Time
 }
 
-func newWriteTargets(cfgs []config.WriteTargetConfig, cells *cellStore) ([]*writeTarget, error) {
-	targets := make([]*writeTarget, 0, len(cfgs))
-	for _, cfg := range cfgs {
-		if cfg.ID == "" {
-			return nil, fmt.Errorf("write target id must not be empty")
-		}
-		if cfg.Function == "" {
-			return nil, fmt.Errorf("write target %s missing function", cfg.ID)
-		}
-		cell, err := cells.mustGet(cfg.Cell)
-		if err != nil {
-			return nil, fmt.Errorf("write target %s: %w", cfg.ID, err)
-		}
-		target := &writeTarget{cfg: cfg, cell: cell}
-		target.disabled.Store(cfg.Disable)
-		targets = append(targets, target)
+// NewWriterFactory builds a Modbus write target factory.
+func NewWriterFactory(factory remote.ClientFactory) serviceio.WriterFactory {
+	if factory == nil {
+		factory = remote.NewTCPClientFactory()
 	}
-	sortTargets(targets)
-	return targets, nil
-}
-
-func sortTargets(targets []*writeTarget) {
-	for i := 1; i < len(targets); i++ {
-		key := targets[i]
-		j := i - 1
-		for j >= 0 && shouldPrecede(key, targets[j]) {
-			targets[j+1] = targets[j]
-			j--
-		}
-		targets[j+1] = key
+	return func(cfg config.WriteTargetConfig, deps serviceio.WriterDependencies) (serviceio.Writer, error) {
+		return newWriteTarget(cfg, deps, factory)
 	}
 }
 
-func shouldPrecede(a, b *writeTarget) bool {
-	if a.cfg.Priority == b.cfg.Priority {
-		return a.cfg.ID < b.cfg.ID
+func newWriteTarget(cfg config.WriteTargetConfig, deps serviceio.WriterDependencies, factory remote.ClientFactory) (serviceio.Writer, error) {
+	if deps.Cells == nil {
+		return nil, fmt.Errorf("write target %s: missing cell store", cfg.ID)
 	}
-	return a.cfg.Priority > b.cfg.Priority
+	if cfg.ID == "" {
+		return nil, fmt.Errorf("write target id must not be empty")
+	}
+	if cfg.Function == "" {
+		return nil, fmt.Errorf("write target %s missing function", cfg.ID)
+	}
+	cell, err := deps.Cells.Get(cfg.Cell)
+	if err != nil {
+		return nil, fmt.Errorf("write target %s: %w", cfg.ID, err)
+	}
+	target := &writeTarget{cfg: cfg, cell: cell, clientFactory: factory}
+	target.disabled.Store(cfg.Disable)
+	return target, nil
 }
 
-func (t *writeTarget) commit(now time.Time, factory remote.ClientFactory, logger zerolog.Logger) int {
+func (t *writeTarget) ID() string {
+	return t.cfg.ID
+}
+
+func (t *writeTarget) Commit(now time.Time, logger zerolog.Logger) int {
 	if t.disabled.Load() {
 		return 0
 	}
@@ -75,7 +70,7 @@ func (t *writeTarget) commit(now time.Time, factory remote.ClientFactory, logger
 	if t.cell == nil {
 		return 0
 	}
-	current, valid := t.cell.currentValue()
+	current, valid := t.cell.CurrentValue()
 	if !valid {
 		logger.Trace().Str("target", t.cfg.ID).Msg("skipping invalid cell")
 		return 0
@@ -97,7 +92,7 @@ func (t *writeTarget) commit(now time.Time, factory remote.ClientFactory, logger
 	if t.client == nil {
 		logger.Trace().Str("target", t.cfg.ID).Msg("creating modbus write client")
 	}
-	client, err := t.ensureClient(factory)
+	client, err := t.ensureClient()
 	if err != nil {
 		t.closeClient()
 		logger.Error().Err(err).Str("target", t.cfg.ID).Msg("write client unavailable")
@@ -126,7 +121,8 @@ func (t *writeTarget) shouldWrite(value interface{}) bool {
 	if lastValue == nil {
 		return true
 	}
-	switch t.cell.cfg.Type {
+	cellCfg := t.cell.Config()
+	switch cellCfg.Type {
 	case config.ValueKindBool:
 		return value != lastValue
 	case config.ValueKindString:
@@ -169,14 +165,14 @@ func (t *writeTarget) recordAttempt(ts time.Time, duration time.Duration) {
 	t.mu.Unlock()
 }
 
-func (t *writeTarget) ensureClient(factory remote.ClientFactory) (remote.Client, error) {
+func (t *writeTarget) ensureClient() (remote.Client, error) {
 	if t.client != nil {
 		return t.client, nil
 	}
-	if factory == nil {
+	if t.clientFactory == nil {
 		return nil, fmt.Errorf("no client factory configured")
 	}
-	client, err := factory(t.cfg.Endpoint)
+	client, err := t.clientFactory(t.cfg.Endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -239,7 +235,7 @@ func (t *writeTarget) closeClient() {
 	t.client = nil
 }
 
-func (t *writeTarget) setDisabled(disabled bool) {
+func (t *writeTarget) SetDisabled(disabled bool) {
 	t.disabled.Store(disabled)
 	if disabled {
 		t.mu.Lock()
@@ -249,13 +245,13 @@ func (t *writeTarget) setDisabled(disabled bool) {
 	}
 }
 
-func (t *writeTarget) status() writeTargetStatus {
+func (t *writeTarget) Status() serviceio.WriteTargetStatus {
 	t.mu.RLock()
 	lastWrite := t.lastWrite
 	lastAttempt := t.lastAttempt
 	lastDuration := t.lastDuration
 	t.mu.RUnlock()
-	return writeTargetStatus{
+	return serviceio.WriteTargetStatus{
 		ID:           t.cfg.ID,
 		Cell:         t.cfg.Cell,
 		Function:     t.cfg.Function,
@@ -266,4 +262,17 @@ func (t *writeTarget) status() writeTargetStatus {
 		LastDuration: lastDuration,
 		Source:       t.cfg.Source,
 	}
+}
+
+func cloneValue(value interface{}) interface{} {
+	switch v := value.(type) {
+	case string:
+		return string([]byte(v))
+	default:
+		return v
+	}
+}
+
+func (t *writeTarget) Close() {
+	t.closeClient()
 }

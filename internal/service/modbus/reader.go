@@ -1,4 +1,4 @@
-package service
+package modbus
 
 import (
 	"encoding/binary"
@@ -12,57 +12,74 @@ import (
 
 	"modbus_processor/internal/config"
 	"modbus_processor/internal/remote"
+	serviceio "modbus_processor/internal/service/io"
 )
 
 type readSignal struct {
-	cfg  config.ReadSignalConfig
-	cell *cell
+	cfg        config.ReadSignalConfig
+	cell       serviceio.Cell
+	cellConfig config.CellConfig
 }
 
 type readGroup struct {
-	cfg          config.ReadGroupConfig
-	signals      []readSignal
-	next         time.Time
-	client       remote.Client
-	mu           sync.RWMutex
-	disabled     atomic.Bool
-	lastRun      time.Time
-	lastDuration time.Duration
+	cfg           config.ReadGroupConfig
+	signals       []readSignal
+	next          time.Time
+	clientFactory remote.ClientFactory
+	client        remote.Client
+	mu            sync.RWMutex
+	disabled      atomic.Bool
+	lastRun       time.Time
+	lastDuration  time.Duration
 }
 
-func newReadGroups(cfgs []config.ReadGroupConfig, cells *cellStore) ([]*readGroup, error) {
-	groups := make([]*readGroup, 0, len(cfgs))
-	for _, cfg := range cfgs {
-		if cfg.ID == "" {
-			return nil, fmt.Errorf("read group id must not be empty")
-		}
-		if cfg.Length == 0 {
-			return nil, fmt.Errorf("read group %s length must be >0", cfg.ID)
-		}
-		if cfg.Function == "" {
-			return nil, fmt.Errorf("read group %s missing function", cfg.ID)
-		}
-		group := &readGroup{cfg: cfg}
-		group.disabled.Store(cfg.Disable)
-		for _, sigCfg := range cfg.Signals {
-			cell, err := cells.mustGet(sigCfg.Cell)
-			if err != nil {
-				return nil, fmt.Errorf("read group %s: %w", cfg.ID, err)
-			}
-			if sigCfg.Type == "" {
-				sigCfg.Type = cell.cfg.Type
-			}
-			if cell.cfg.Type != sigCfg.Type {
-				return nil, fmt.Errorf("read group %s signal %s type mismatch (cell %s is %s, signal is %s)", cfg.ID, sigCfg.Cell, sigCfg.Cell, cell.cfg.Type, sigCfg.Type)
-			}
-			group.signals = append(group.signals, readSignal{cfg: sigCfg, cell: cell})
-		}
-		groups = append(groups, group)
+// NewReaderFactory builds a Modbus read group factory.
+func NewReaderFactory(factory remote.ClientFactory) serviceio.ReaderFactory {
+	if factory == nil {
+		factory = remote.NewTCPClientFactory()
 	}
-	return groups, nil
+	return func(cfg config.ReadGroupConfig, deps serviceio.ReaderDependencies) (serviceio.ReadGroup, error) {
+		return newReadGroup(cfg, deps, factory)
+	}
 }
 
-func (g *readGroup) due(now time.Time) bool {
+func newReadGroup(cfg config.ReadGroupConfig, deps serviceio.ReaderDependencies, factory remote.ClientFactory) (serviceio.ReadGroup, error) {
+	if deps.Cells == nil {
+		return nil, fmt.Errorf("read group %s: missing cell store", cfg.ID)
+	}
+	if cfg.ID == "" {
+		return nil, fmt.Errorf("read group id must not be empty")
+	}
+	if cfg.Length == 0 {
+		return nil, fmt.Errorf("read group %s length must be >0", cfg.ID)
+	}
+	if cfg.Function == "" {
+		return nil, fmt.Errorf("read group %s missing function", cfg.ID)
+	}
+	group := &readGroup{cfg: cfg, clientFactory: factory}
+	group.disabled.Store(cfg.Disable)
+	for _, sigCfg := range cfg.Signals {
+		cell, err := deps.Cells.Get(sigCfg.Cell)
+		if err != nil {
+			return nil, fmt.Errorf("read group %s: %w", cfg.ID, err)
+		}
+		cellCfg := cell.Config()
+		if sigCfg.Type == "" {
+			sigCfg.Type = cellCfg.Type
+		}
+		if cellCfg.Type != sigCfg.Type {
+			return nil, fmt.Errorf("read group %s signal %s type mismatch (cell %s is %s, signal is %s)", cfg.ID, sigCfg.Cell, sigCfg.Cell, cellCfg.Type, sigCfg.Type)
+		}
+		group.signals = append(group.signals, readSignal{cfg: sigCfg, cell: cell, cellConfig: cellCfg})
+	}
+	return group, nil
+}
+
+func (g *readGroup) ID() string {
+	return g.cfg.ID
+}
+
+func (g *readGroup) Due(now time.Time) bool {
 	if g.disabled.Load() {
 		return false
 	}
@@ -79,7 +96,7 @@ func (g *readGroup) due(now time.Time) bool {
 	return !now.Before(next)
 }
 
-func (g *readGroup) perform(now time.Time, factory remote.ClientFactory, logger zerolog.Logger) int {
+func (g *readGroup) Perform(now time.Time, logger zerolog.Logger) int {
 	if g.disabled.Load() {
 		return 0
 	}
@@ -102,7 +119,7 @@ func (g *readGroup) perform(now time.Time, factory remote.ClientFactory, logger 
 	if g.client == nil {
 		logger.Trace().Str("group", g.cfg.ID).Msg("creating modbus read client")
 	}
-	client, err := g.ensureClient(factory)
+	client, err := g.ensureClient()
 	if err != nil {
 		g.invalidateAll(now, "read.connect", err.Error())
 		g.closeClient()
@@ -120,7 +137,7 @@ func (g *readGroup) perform(now time.Time, factory remote.ClientFactory, logger 
 
 	for _, sig := range g.signals {
 		if err := sig.apply(raw, g.cfg.Function, now); err != nil {
-			sig.cell.markInvalid(now, "read.marshal", err.Error())
+			sig.cell.MarkInvalid(now, "read.marshal", err.Error())
 			logger.Error().Err(err).Str("group", g.cfg.ID).Str("cell", sig.cfg.Cell).Msg("signal decode failed")
 			errors++
 		}
@@ -134,14 +151,14 @@ func (g *readGroup) perform(now time.Time, factory remote.ClientFactory, logger 
 	return errors
 }
 
-func (g *readGroup) ensureClient(factory remote.ClientFactory) (remote.Client, error) {
+func (g *readGroup) ensureClient() (remote.Client, error) {
 	if g.client != nil {
 		return g.client, nil
 	}
-	if factory == nil {
+	if g.clientFactory == nil {
 		return nil, fmt.Errorf("no client factory configured")
 	}
-	client, err := factory(g.cfg.Endpoint)
+	client, err := g.clientFactory(g.cfg.Endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -166,11 +183,11 @@ func (g *readGroup) read(client remote.Client) ([]byte, error) {
 
 func (g *readGroup) invalidateAll(ts time.Time, code, message string) {
 	for _, sig := range g.signals {
-		sig.cell.markInvalid(ts, code, message)
+		sig.cell.MarkInvalid(ts, code, message)
 	}
 }
 
-func (g *readGroup) setDisabled(disabled bool) {
+func (g *readGroup) SetDisabled(disabled bool) {
 	g.disabled.Store(disabled)
 	if disabled {
 		g.mu.Lock()
@@ -179,13 +196,13 @@ func (g *readGroup) setDisabled(disabled bool) {
 	}
 }
 
-func (g *readGroup) status() readGroupStatus {
+func (g *readGroup) Status() serviceio.ReadGroupStatus {
 	g.mu.RLock()
 	next := g.next
 	lastRun := g.lastRun
 	lastDuration := g.lastDuration
 	g.mu.RUnlock()
-	return readGroupStatus{
+	return serviceio.ReadGroupStatus{
 		ID:           g.cfg.ID,
 		Function:     g.cfg.Function,
 		Start:        g.cfg.Start,
@@ -216,13 +233,13 @@ func (s *readSignal) apply(raw []byte, function string, ts time.Time) error {
 		if err != nil {
 			return err
 		}
-		return s.cell.setValue(value, ts, nil)
+		return s.cell.SetValue(value, ts, nil)
 	case config.ValueKindNumber:
 		value, err := s.numberValue(raw, function)
 		if err != nil {
 			return err
 		}
-		return s.cell.setValue(value, ts, nil)
+		return s.cell.SetValue(value, ts, nil)
 	case config.ValueKindString:
 		return fmt.Errorf("string decoding from modbus not implemented")
 	default:
@@ -290,4 +307,8 @@ func (s *readSignal) readWord(raw []byte) (uint16, error) {
 	default:
 		return binary.BigEndian.Uint16(raw[offset:]), nil
 	}
+}
+
+func (g *readGroup) Close() {
+	g.closeClient()
 }

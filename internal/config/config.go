@@ -60,6 +60,7 @@ type EndpointConfig struct {
 	Address string   `yaml:"address"`
 	UnitID  uint8    `yaml:"unit_id"`
 	Timeout Duration `yaml:"timeout,omitempty"`
+	Driver  string   `yaml:"driver,omitempty"`
 }
 
 // ModuleReference captures metadata about the configuration source that defined an entry.
