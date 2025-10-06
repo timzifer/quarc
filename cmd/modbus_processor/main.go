@@ -93,6 +93,9 @@ func executeConfigCheck(cfg *config.Config) int {
 	exitCode := 0
 	for _, report := range reports {
 		fmt.Printf("Logic block %q\n", report.ID)
+		if module := describeModule(report.Source); module != "" {
+			fmt.Printf("  Module: %s\n", module)
+		}
 		fmt.Printf("  Target: %s", report.Target)
 		if report.TargetType != "" {
 			fmt.Printf(" (%s)", report.TargetType)
@@ -161,6 +164,9 @@ func printDependencyGroup(title string, deps []service.DependencyReport, filter 
 		if dep.ManuallyConfigured {
 			notes = append(notes, "configured")
 		}
+		if module := describeModule(dep.Source); module != "" {
+			notes = append(notes, fmt.Sprintf("module %s", module))
+		}
 		switch title {
 		case "Expression dependencies":
 			if dep.InValid {
@@ -193,4 +199,27 @@ func printDependencyGroup(title string, deps []service.DependencyReport, filter 
 		}
 		fmt.Println()
 	}
+}
+
+func describeModule(ref config.ModuleReference) string {
+	name := strings.TrimSpace(ref.Name)
+	file := strings.TrimSpace(ref.File)
+	desc := strings.TrimSpace(ref.Description)
+
+	label := ""
+	if name != "" && file != "" {
+		label = fmt.Sprintf("%s (%s)", name, file)
+	} else if name != "" {
+		label = name
+	} else if file != "" {
+		label = file
+	}
+	if desc != "" {
+		if label != "" {
+			label = fmt.Sprintf("%s – %s", label, desc)
+		} else {
+			label = desc
+		}
+	}
+	return label
 }

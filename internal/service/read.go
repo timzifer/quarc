@@ -194,6 +194,7 @@ func (g *readGroup) status() readGroupStatus {
 		NextRun:      next,
 		LastRun:      lastRun,
 		LastDuration: lastDuration,
+		Source:       g.cfg.Source,
 	}
 }
 

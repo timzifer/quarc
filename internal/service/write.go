@@ -264,5 +264,6 @@ func (t *writeTarget) status() writeTargetStatus {
 		LastWrite:    lastWrite,
 		LastAttempt:  lastAttempt,
 		LastDuration: lastDuration,
+		Source:       t.cfg.Source,
 	}
 }

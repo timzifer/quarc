@@ -62,15 +62,67 @@ type EndpointConfig struct {
 	Timeout Duration `yaml:"timeout,omitempty"`
 }
 
+// ModuleReference captures metadata about the configuration source that defined an entry.
+type ModuleReference struct {
+	File        string `json:"file,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// ModuleInclude describes a referenced configuration module.
+type ModuleInclude struct {
+	Path        string
+	Name        string
+	Description string
+}
+
+// UnmarshalYAML allows module includes to be declared either as scalar strings or structured objects.
+func (m *ModuleInclude) UnmarshalYAML(value *yaml.Node) error {
+	if value == nil {
+		return errors.New("module include node is nil")
+	}
+	switch value.Kind {
+	case yaml.ScalarNode:
+		var path string
+		if err := value.Decode(&path); err != nil {
+			return fmt.Errorf("decode module path: %w", err)
+		}
+		m.Path = strings.TrimSpace(path)
+		return nil
+	case yaml.MappingNode:
+		type rawModule struct {
+			Path        string `yaml:"path"`
+			Name        string `yaml:"name"`
+			Description string `yaml:"description"`
+		}
+		var raw rawModule
+		if err := value.Decode(&raw); err != nil {
+			return fmt.Errorf("decode module include: %w", err)
+		}
+		if raw.Path == "" {
+			return errors.New("module include missing path")
+		}
+		m.Path = raw.Path
+		m.Name = raw.Name
+		m.Description = raw.Description
+		return nil
+	default:
+		return fmt.Errorf("unsupported module include node kind %d", value.Kind)
+	}
+}
+
 // CellConfig configures a local memory cell.
 type CellConfig struct {
-	ID       string      `yaml:"id"`
-	Type     ValueKind   `yaml:"type"`
-	Unit     string      `yaml:"unit,omitempty"`
-	TTL      Duration    `yaml:"ttl,omitempty"`
-	Scale    float64     `yaml:"scale,omitempty"`
-	Constant interface{} `yaml:"constant,omitempty"`
-	Metadata yaml.Node   `yaml:"metadata,omitempty"`
+	ID          string          `yaml:"id"`
+	Type        ValueKind       `yaml:"type"`
+	Unit        string          `yaml:"unit,omitempty"`
+	TTL         Duration        `yaml:"ttl,omitempty"`
+	Scale       float64         `yaml:"scale,omitempty"`
+	Constant    interface{}     `yaml:"constant,omitempty"`
+	Metadata    yaml.Node       `yaml:"metadata,omitempty"`
+	Name        string          `yaml:"name,omitempty"`
+	Description string          `yaml:"description,omitempty"`
+	Source      ModuleReference `yaml:"-"`
 }
 
 // ReadSignalConfig maps a portion of a Modbus read block into a cell.
@@ -94,22 +146,24 @@ type ReadGroupConfig struct {
 	TTL      Duration           `yaml:"ttl"`
 	Signals  []ReadSignalConfig `yaml:"signals"`
 	Disable  bool               `yaml:"disable,omitempty"`
+	Source   ModuleReference    `yaml:"-"`
 }
 
 // WriteTargetConfig describes how a cell is pushed to Modbus.
 type WriteTargetConfig struct {
-	ID         string         `yaml:"id"`
-	Cell       string         `yaml:"cell"`
-	Endpoint   EndpointConfig `yaml:"endpoint"`
-	Function   string         `yaml:"function"`
-	Address    uint16         `yaml:"address"`
-	Scale      float64        `yaml:"scale,omitempty"`
-	Endianness string         `yaml:"endianness,omitempty"`
-	Signed     bool           `yaml:"signed,omitempty"`
-	Deadband   float64        `yaml:"deadband,omitempty"`
-	RateLimit  Duration       `yaml:"rate_limit,omitempty"`
-	Priority   int            `yaml:"priority,omitempty"`
-	Disable    bool           `yaml:"disable,omitempty"`
+	ID         string          `yaml:"id"`
+	Cell       string          `yaml:"cell"`
+	Endpoint   EndpointConfig  `yaml:"endpoint"`
+	Function   string          `yaml:"function"`
+	Address    uint16          `yaml:"address"`
+	Scale      float64         `yaml:"scale,omitempty"`
+	Endianness string          `yaml:"endianness,omitempty"`
+	Signed     bool            `yaml:"signed,omitempty"`
+	Deadband   float64         `yaml:"deadband,omitempty"`
+	RateLimit  Duration        `yaml:"rate_limit,omitempty"`
+	Priority   int             `yaml:"priority,omitempty"`
+	Disable    bool            `yaml:"disable,omitempty"`
+	Source     ModuleReference `yaml:"-"`
 }
 
 // ProgramSignalConfig maps a program signal onto a cell.
@@ -129,6 +183,7 @@ type ProgramConfig struct {
 	Outputs  []ProgramSignalConfig  `yaml:"outputs,omitempty"`
 	Settings map[string]interface{} `yaml:"settings,omitempty"`
 	Metadata yaml.Node              `yaml:"metadata,omitempty"`
+	Source   ModuleReference        `yaml:"-"`
 }
 
 // DependencyConfig describes a dependency for a logic block.
@@ -148,6 +203,7 @@ type LogicBlockConfig struct {
 	Valid        string             `yaml:"valid"`
 	Quality      string             `yaml:"quality"`
 	Metadata     yaml.Node          `yaml:"metadata,omitempty"`
+	Source       ModuleReference    `yaml:"-"`
 }
 
 // HelperFunctionConfig defines a standalone helper function that can be used from logic expressions.
@@ -210,19 +266,22 @@ type ServerConfig struct {
 
 // Config is the root configuration structure for the service.
 type Config struct {
-	Cycle    Duration               `yaml:"cycle"`
-	Logging  LoggingConfig          `yaml:"logging"`
-	Modules  []string               `yaml:"modules"`
-	Workers  WorkerSlots            `yaml:"workers,omitempty"`
-	Programs []ProgramConfig        `yaml:"programs,omitempty"`
-	Cells    []CellConfig           `yaml:"cells"`
-	Reads    []ReadGroupConfig      `yaml:"reads"`
-	Writes   []WriteTargetConfig    `yaml:"writes"`
-	Logic    []LogicBlockConfig     `yaml:"logic"`
-	DSL      DSLConfig              `yaml:"dsl"`
-	Helpers  []HelperFunctionConfig `yaml:"helpers,omitempty"`
-	Policies GlobalPolicies         `yaml:"policies"`
-	Server   ServerConfig           `yaml:"server"`
+	Name        string                 `yaml:"name,omitempty"`
+	Description string                 `yaml:"description,omitempty"`
+	Cycle       Duration               `yaml:"cycle"`
+	Logging     LoggingConfig          `yaml:"logging"`
+	Modules     []ModuleInclude        `yaml:"modules"`
+	Workers     WorkerSlots            `yaml:"workers,omitempty"`
+	Programs    []ProgramConfig        `yaml:"programs,omitempty"`
+	Cells       []CellConfig           `yaml:"cells"`
+	Reads       []ReadGroupConfig      `yaml:"reads"`
+	Writes      []WriteTargetConfig    `yaml:"writes"`
+	Logic       []LogicBlockConfig     `yaml:"logic"`
+	DSL         DSLConfig              `yaml:"dsl"`
+	Helpers     []HelperFunctionConfig `yaml:"helpers,omitempty"`
+	Policies    GlobalPolicies         `yaml:"policies"`
+	Server      ServerConfig           `yaml:"server"`
+	Source      ModuleReference        `yaml:"-"`
 }
 
 // Load reads and decodes the configuration file from disk.
@@ -271,22 +330,24 @@ func loadFile(path string, visited map[string]struct{}) (*Config, error) {
 		return nil, fmt.Errorf("unmarshal config %s: %w", path, err)
 	}
 
+	cfg.setSource(ModuleReference{File: path, Name: cfg.Name, Description: cfg.Description})
+
 	modules := cfg.Modules
 	cfg.Modules = nil
 
 	baseDir := filepath.Dir(path)
 	for _, module := range modules {
-		if module == "" {
+		if module.Path == "" {
 			continue
 		}
-		modulePath := module
+		modulePath := module.Path
 		if !filepath.IsAbs(modulePath) {
-			modulePath = filepath.Join(baseDir, module)
+			modulePath = filepath.Join(baseDir, module.Path)
 		}
 
 		info, err := os.Stat(modulePath)
 		if err != nil {
-			return nil, fmt.Errorf("load module %s: %w", module, err)
+			return nil, fmt.Errorf("load module %s: %w", module.Path, err)
 		}
 
 		var modCfg *Config
@@ -296,8 +357,16 @@ func loadFile(path string, visited map[string]struct{}) (*Config, error) {
 			modCfg, err = loadFile(modulePath, visited)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("load module %s: %w", module, err)
+			return nil, fmt.Errorf("load module %s: %w", module.Path, err)
 		}
+		if modCfg == nil {
+			continue
+		}
+		override := ModuleReference{
+			Name:        firstNonEmpty(module.Name, modCfg.Source.Name),
+			Description: firstNonEmpty(module.Description, modCfg.Source.Description),
+		}
+		modCfg.applyModuleMetadata(override)
 		mergeConfig(&cfg, modCfg)
 	}
 
@@ -312,6 +381,7 @@ func loadDir(path string, visited map[string]struct{}) (*Config, error) {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 
 	result := &Config{}
+	result.setSource(ModuleReference{File: path})
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -369,4 +439,99 @@ func mergeConfig(dst, src *Config) {
 	dst.Reads = append(dst.Reads, src.Reads...)
 	dst.Writes = append(dst.Writes, src.Writes...)
 	dst.Logic = append(dst.Logic, src.Logic...)
+}
+
+func (c *Config) setSource(meta ModuleReference) {
+	if c == nil {
+		return
+	}
+	if meta.File == "" {
+		meta.File = c.Source.File
+	}
+	if meta.Name == "" {
+		meta.Name = c.Name
+	}
+	if meta.Description == "" {
+		meta.Description = c.Description
+	}
+	c.Source = meta
+	c.applySource(meta)
+}
+
+func (c *Config) applySource(meta ModuleReference) {
+	if c == nil {
+		return
+	}
+	for i := range c.Cells {
+		c.Cells[i].Source = mergeInitialSource(c.Cells[i].Source, meta)
+	}
+	for i := range c.Programs {
+		c.Programs[i].Source = mergeInitialSource(c.Programs[i].Source, meta)
+	}
+	for i := range c.Reads {
+		c.Reads[i].Source = mergeInitialSource(c.Reads[i].Source, meta)
+	}
+	for i := range c.Writes {
+		c.Writes[i].Source = mergeInitialSource(c.Writes[i].Source, meta)
+	}
+	for i := range c.Logic {
+		c.Logic[i].Source = mergeInitialSource(c.Logic[i].Source, meta)
+	}
+}
+
+func (c *Config) applyModuleMetadata(meta ModuleReference) {
+	if c == nil {
+		return
+	}
+	c.Source = mergeModuleOverride(c.Source, meta)
+	for i := range c.Cells {
+		c.Cells[i].Source = mergeModuleOverride(c.Cells[i].Source, meta)
+	}
+	for i := range c.Programs {
+		c.Programs[i].Source = mergeModuleOverride(c.Programs[i].Source, meta)
+	}
+	for i := range c.Reads {
+		c.Reads[i].Source = mergeModuleOverride(c.Reads[i].Source, meta)
+	}
+	for i := range c.Writes {
+		c.Writes[i].Source = mergeModuleOverride(c.Writes[i].Source, meta)
+	}
+	for i := range c.Logic {
+		c.Logic[i].Source = mergeModuleOverride(c.Logic[i].Source, meta)
+	}
+}
+
+func mergeInitialSource(child, meta ModuleReference) ModuleReference {
+	if child.File == "" && meta.File != "" {
+		child.File = meta.File
+	}
+	if child.Name == "" && meta.Name != "" {
+		child.Name = meta.Name
+	}
+	if child.Description == "" && meta.Description != "" {
+		child.Description = meta.Description
+	}
+	return child
+}
+
+func mergeModuleOverride(base, override ModuleReference) ModuleReference {
+	if override.File != "" {
+		base.File = override.File
+	}
+	if override.Name != "" {
+		base.Name = override.Name
+	}
+	if override.Description != "" {
+		base.Description = override.Description
+	}
+	return base
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }

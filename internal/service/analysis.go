@@ -18,6 +18,7 @@ type DependencyReport struct {
 	InQuality          bool
 	ManuallyConfigured bool
 	Resolved           bool
+	Source             config.ModuleReference
 }
 
 type LogicBlockReport struct {
@@ -29,6 +30,7 @@ type LogicBlockReport struct {
 	Quality      string
 	Dependencies []DependencyReport
 	Errors       []string
+	Source       config.ModuleReference
 }
 
 func AnalyzeLogic(cfg *config.Config) ([]LogicBlockReport, error) {
@@ -53,6 +55,7 @@ func AnalyzeLogic(cfg *config.Config) ([]LogicBlockReport, error) {
 			Expression: strings.TrimSpace(blockCfg.Expression),
 			Valid:      strings.TrimSpace(blockCfg.Valid),
 			Quality:    strings.TrimSpace(blockCfg.Quality),
+			Source:     blockCfg.Source,
 		}
 
 		block, meta, buildErr := prepareLogicBlock(blockCfg, cells, dsl, idx)
@@ -88,6 +91,7 @@ func buildDependencyReport(meta map[string]*dependencyMeta) []DependencyReport {
 		if entry.cell != nil {
 			dep.Type = entry.cell.cfg.Type
 			dep.Resolved = true
+			dep.Source = entry.cell.cfg.Source
 		}
 		reports = append(reports, dep)
 	}

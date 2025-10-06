@@ -50,13 +50,16 @@ type CellDiagnosis struct {
 
 // CellState exposes the current state of a cell for external inspection.
 type CellState struct {
-	ID        string
-	Kind      config.ValueKind
-	Value     interface{}
-	Valid     bool
-	Quality   *float64
-	Diagnosis *CellDiagnosis
-	UpdatedAt time.Time
+	ID          string
+	Name        string
+	Description string
+	Kind        config.ValueKind
+	Value       interface{}
+	Valid       bool
+	Quality     *float64
+	Diagnosis   *CellDiagnosis
+	UpdatedAt   *time.Time
+	Source      config.ModuleReference
 }
 
 type cellStore struct {
@@ -291,14 +294,22 @@ func (c *cell) state() CellState {
 	if c.diag != nil {
 		diag = &CellDiagnosis{Code: c.diag.Code, Message: c.diag.Message, Timestamp: c.diag.Timestamp}
 	}
+	var updated *time.Time
+	if !c.update.IsZero() {
+		ts := c.update
+		updated = &ts
+	}
 	return CellState{
-		ID:        c.cfg.ID,
-		Kind:      c.cfg.Type,
-		Value:     cloneValue(c.value),
-		Valid:     c.valid,
-		Quality:   cloneQuality(c.quality),
-		Diagnosis: diag,
-		UpdatedAt: c.update,
+		ID:          c.cfg.ID,
+		Name:        c.cfg.Name,
+		Description: c.cfg.Description,
+		Kind:        c.cfg.Type,
+		Value:       cloneValue(c.value),
+		Valid:       c.valid,
+		Quality:     cloneQuality(c.quality),
+		Diagnosis:   diag,
+		UpdatedAt:   updated,
+		Source:      c.cfg.Source,
 	}
 }
 

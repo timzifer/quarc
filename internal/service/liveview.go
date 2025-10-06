@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"modbus_processor/internal/config"
 )
 
 type liveViewServer struct {
@@ -31,22 +33,26 @@ type liveStateResponse struct {
 }
 
 type liveCell struct {
-	ID        string         `json:"id"`
-	Kind      string         `json:"kind"`
-	Value     interface{}    `json:"value"`
-	Valid     bool           `json:"valid"`
-	Quality   *float64       `json:"quality"`
-	Diagnosis *CellDiagnosis `json:"diagnosis,omitempty"`
-	UpdatedAt time.Time      `json:"updated_at"`
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name,omitempty"`
+	Description string                 `json:"description,omitempty"`
+	Kind        string                 `json:"kind"`
+	Value       interface{}            `json:"value"`
+	Valid       bool                   `json:"valid"`
+	Quality     *float64               `json:"quality"`
+	Diagnosis   *CellDiagnosis         `json:"diagnosis,omitempty"`
+	UpdatedAt   *time.Time             `json:"updated_at"`
+	Source      config.ModuleReference `json:"source,omitempty"`
 }
 
 type liveLogicBlock struct {
-	ID      string  `json:"id"`
-	Target  string  `json:"target"`
-	Calls   uint64  `json:"calls"`
-	Skipped uint64  `json:"skipped"`
-	AvgMS   float64 `json:"avg_ms"`
-	LastMS  float64 `json:"last_ms"`
+	ID      string                 `json:"id"`
+	Target  string                 `json:"target"`
+	Calls   uint64                 `json:"calls"`
+	Skipped uint64                 `json:"skipped"`
+	AvgMS   float64                `json:"avg_ms"`
+	LastMS  float64                `json:"last_ms"`
+	Source  config.ModuleReference `json:"source,omitempty"`
 }
 
 type systemInfo struct {
@@ -61,25 +67,27 @@ type liveWorker struct {
 }
 
 type liveReadGroup struct {
-	ID             string     `json:"id"`
-	Function       string     `json:"function"`
-	Start          uint16     `json:"start"`
-	Length         uint16     `json:"length"`
-	Disabled       bool       `json:"disabled"`
-	NextRun        *time.Time `json:"next_run,omitempty"`
-	LastRun        *time.Time `json:"last_run,omitempty"`
-	LastDurationMS float64    `json:"last_duration_ms"`
+	ID             string                 `json:"id"`
+	Function       string                 `json:"function"`
+	Start          uint16                 `json:"start"`
+	Length         uint16                 `json:"length"`
+	Disabled       bool                   `json:"disabled"`
+	NextRun        *time.Time             `json:"next_run,omitempty"`
+	LastRun        *time.Time             `json:"last_run,omitempty"`
+	LastDurationMS float64                `json:"last_duration_ms"`
+	Source         config.ModuleReference `json:"source,omitempty"`
 }
 
 type liveWriteTarget struct {
-	ID             string     `json:"id"`
-	Cell           string     `json:"cell"`
-	Function       string     `json:"function"`
-	Address        uint16     `json:"address"`
-	Disabled       bool       `json:"disabled"`
-	LastWrite      *time.Time `json:"last_write,omitempty"`
-	LastAttempt    *time.Time `json:"last_attempt,omitempty"`
-	LastDurationMS float64    `json:"last_duration_ms"`
+	ID             string                 `json:"id"`
+	Cell           string                 `json:"cell"`
+	Function       string                 `json:"function"`
+	Address        uint16                 `json:"address"`
+	Disabled       bool                   `json:"disabled"`
+	LastWrite      *time.Time             `json:"last_write,omitempty"`
+	LastAttempt    *time.Time             `json:"last_attempt,omitempty"`
+	LastDurationMS float64                `json:"last_duration_ms"`
+	Source         config.ModuleReference `json:"source,omitempty"`
 }
 
 type cellUpdateRequest struct {
@@ -116,13 +124,16 @@ func isJSONNull(raw *json.RawMessage) bool {
 
 func toLiveCell(state CellState) liveCell {
 	return liveCell{
-		ID:        state.ID,
-		Kind:      string(state.Kind),
-		Value:     state.Value,
-		Valid:     state.Valid,
-		Quality:   state.Quality,
-		Diagnosis: state.Diagnosis,
-		UpdatedAt: state.UpdatedAt,
+		ID:          state.ID,
+		Name:        state.Name,
+		Description: state.Description,
+		Kind:        string(state.Kind),
+		Value:       state.Value,
+		Valid:       state.Valid,
+		Quality:     state.Quality,
+		Diagnosis:   state.Diagnosis,
+		UpdatedAt:   state.UpdatedAt,
+		Source:      state.Source,
 	}
 }
 
@@ -190,6 +201,7 @@ func (s *liveViewServer) handleState(w http.ResponseWriter, r *http.Request) {
 			Skipped: entry.Metrics.Skipped,
 			AvgMS:   durationToMillis(entry.Metrics.Average),
 			LastMS:  durationToMillis(entry.Metrics.Last),
+			Source:  entry.Source,
 		})
 	}
 	readStatuses := s.service.ReadStatuses()
@@ -204,6 +216,7 @@ func (s *liveViewServer) handleState(w http.ResponseWriter, r *http.Request) {
 			NextRun:        timePtr(status.NextRun),
 			LastRun:        timePtr(status.LastRun),
 			LastDurationMS: durationToMillis(status.LastDuration),
+			Source:         status.Source,
 		})
 	}
 	writeStatuses := s.service.WriteStatuses()
@@ -218,6 +231,7 @@ func (s *liveViewServer) handleState(w http.ResponseWriter, r *http.Request) {
 			LastWrite:      timePtr(status.LastWrite),
 			LastAttempt:    timePtr(status.LastAttempt),
 			LastDurationMS: durationToMillis(status.LastDuration),
+			Source:         status.Source,
 		})
 	}
 	sys := s.service.SystemLoad()
