@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -19,7 +18,6 @@ type writeTarget struct {
 	client    remote.Client
 	lastValue interface{}
 	lastWrite time.Time
-	disabled  atomic.Bool
 }
 
 func newWriteTargets(cfgs []config.WriteTargetConfig, cells *cellStore) ([]*writeTarget, error) {
@@ -35,11 +33,7 @@ func newWriteTargets(cfgs []config.WriteTargetConfig, cells *cellStore) ([]*writ
 		if err != nil {
 			return nil, fmt.Errorf("write target %s: %w", cfg.ID, err)
 		}
-		target := &writeTarget{cfg: cfg, cell: cell}
-		if cfg.Disable {
-			target.disabled.Store(true)
-		}
-		targets = append(targets, target)
+		targets = append(targets, &writeTarget{cfg: cfg, cell: cell})
 	}
 	sortTargets(targets)
 	return targets, nil
@@ -65,9 +59,6 @@ func shouldPrecede(a, b *writeTarget) bool {
 }
 
 func (t *writeTarget) commit(now time.Time, factory remote.ClientFactory, logger zerolog.Logger) int {
-	if t.Disabled() {
-		return 0
-	}
 	errors := 0
 	logger.Trace().Str("target", t.cfg.ID).Msg("write target evaluation started")
 	if t.cell == nil {
@@ -206,33 +197,4 @@ func (t *writeTarget) closeClient() {
 	}
 	_ = t.client.Close()
 	t.client = nil
-}
-
-func (t *writeTarget) Disabled() bool {
-	return t.disabled.Load()
-}
-
-func (t *writeTarget) SetDisabled(disable bool) {
-	t.disabled.Store(disable)
-	if disable {
-		t.closeClient()
-	}
-}
-
-func (t *writeTarget) state() writeTargetState {
-	return writeTargetState{
-		ID:       t.cfg.ID,
-		Cell:     t.cfg.Cell,
-		Function: t.cfg.Function,
-		Address:  t.cfg.Address,
-		Disabled: t.Disabled(),
-	}
-}
-
-type writeTargetState struct {
-	ID       string `json:"id"`
-	Cell     string `json:"cell"`
-	Function string `json:"function"`
-	Address  uint16 `json:"address"`
-	Disabled bool   `json:"disabled"`
 }
