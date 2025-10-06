@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/expr-lang/expr/ast"
@@ -32,6 +33,8 @@ type logicBlock struct {
 	expressionDependencyIDs []string
 	validDependencyIDs      []string
 	qualityDependencyIDs    []string
+	dependents              []*logicBlock
+	internalDependencies    int
 }
 
 type validationResult struct {
@@ -96,6 +99,15 @@ func newLogicBlocks(cfgs []config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 	ordered, err := topoSort(blocks, producers)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	for _, block := range blocks {
+		for _, dep := range block.deps {
+			if producer, ok := producers[dep.cell.cfg.ID]; ok {
+				block.internalDependencies++
+				producer.dependents = append(producer.dependents, block)
+			}
+		}
 	}
 
 	return blocks, ordered, nil
@@ -487,7 +499,7 @@ func topoSort(blocks []*logicBlock, producers map[string]*logicBlock) ([]*logicB
 	return ordered, nil
 }
 
-func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue, logger zerolog.Logger) int {
+func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue, mu *sync.RWMutex, logger zerolog.Logger) int {
 	errors := 0
 	if b.target == nil {
 		return 0
@@ -496,7 +508,8 @@ func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue,
 	blockLogger := logger.With().Str("block", b.cfg.ID).Logger()
 	blockLogger.Trace().Msg("logic block evaluation started")
 
-	ready := b.dependenciesReady(snapshot)
+	view := cloneSnapshotValues(snapshot, mu)
+	ready := b.dependenciesReady(view)
 	var (
 		value   interface{}
 		evalErr error
@@ -508,17 +521,17 @@ func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue,
 	case b.expression == nil:
 		evalErr = evaluationError{Code: "logic.expression_missing", Message: "no expression configured"}
 	default:
-		value, evalErr = b.runExpression(snapshot)
+		value, evalErr = b.runExpression(view)
 		if evalErr != nil {
 			blockLogger.Debug().Err(evalErr).Msg("expression evaluation failed")
 		}
 	}
 
-	decision, valErr := b.runValidation(snapshot, value, evalErr)
+	decision, valErr := b.runValidation(view, value, evalErr)
 	if valErr != nil {
 		blockLogger.Error().Err(valErr).Msg("validate evaluation failed")
 		b.target.markInvalid(now, "logic.validate_error", valErr.Error())
-		snapshot[b.target.cfg.ID] = b.target.asSnapshotValue()
+		updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
 		errors++
 		return errors
 	}
@@ -532,11 +545,11 @@ func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue,
 		if err := b.target.setValue(value, now, decision.quality); err != nil {
 			blockLogger.Error().Err(err).Msg("assign result")
 			b.target.markInvalid(now, "logic.assign", err.Error())
-			snapshot[b.target.cfg.ID] = b.target.asSnapshotValue()
+			updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
 			errors++
 			return errors
 		}
-		snapshot[b.target.cfg.ID] = b.target.asSnapshotValue()
+		updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
 		blockLogger.Trace().Bool("success", true).Msg("logic block evaluation completed")
 		return errors
 	}
@@ -550,7 +563,7 @@ func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue,
 	} else {
 		b.target.markInvalid(now, "logic.invalid", "evaluation failed")
 	}
-	snapshot[b.target.cfg.ID] = b.target.asSnapshotValue()
+	updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
 	blockLogger.Trace().Bool("success", false).Msg("logic block evaluation completed")
 	errors++
 	return errors
@@ -701,6 +714,46 @@ func (b *logicBlock) buildValidationEnv(snapshot map[string]*snapshotValue, valu
 	return env
 }
 
+func cloneSnapshotValues(snapshot map[string]*snapshotValue, mu *sync.RWMutex) map[string]*snapshotValue {
+	if snapshot == nil {
+		return nil
+	}
+	if mu != nil {
+		mu.RLock()
+	}
+	clone := make(map[string]*snapshotValue, len(snapshot))
+	for id, snap := range snapshot {
+		if snap == nil {
+			clone[id] = nil
+			continue
+		}
+		copy := &snapshotValue{
+			Value:   cloneValue(snap.Value),
+			Valid:   snap.Valid,
+			Kind:    snap.Kind,
+			Quality: cloneQuality(snap.Quality),
+		}
+		clone[id] = copy
+	}
+	if mu != nil {
+		mu.RUnlock()
+	}
+	return clone
+}
+
+func updateSnapshotValue(snapshot map[string]*snapshotValue, mu *sync.RWMutex, id string, value *snapshotValue) {
+	if snapshot == nil {
+		return
+	}
+	if mu != nil {
+		mu.Lock()
+		snapshot[id] = value
+		mu.Unlock()
+		return
+	}
+	snapshot[id] = value
+}
+
 func normalizeEvaluationError(err error) error {
 	if err == nil {
 		return nil
@@ -749,27 +802,8 @@ func applyValidationOutcome(base validationResult, outcome interface{}) validati
 	if outcome == nil {
 		return base
 	}
-	switch v := outcome.(type) {
-	case bool:
-		base.valid = v
-	case float64:
-		base.quality = floatPtr(v)
-	case float32:
-		base.quality = floatPtr(float64(v))
-	case int, int8, int16, int32, int64:
-		base.quality = floatPtr(float64(toInt64(v)))
-	case uint, uint8, uint16, uint32, uint64:
-		base.quality = floatPtr(float64(toUint64(v)))
-	case string:
-		base.valid = false
-		base.code = v
-		if base.message == "" {
-			base.message = v
-		}
-	case map[string]interface{}:
-		base = applyValidationMap(base, v)
-	default:
-		// no-op for unsupported types
+	if b, ok := toBool(outcome); ok {
+		base.valid = b
 	}
 	return base
 }

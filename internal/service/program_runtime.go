@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -138,7 +139,7 @@ func (b *programBinding) prepareInputs(snapshot map[string]*snapshotValue) []pro
 	return signals
 }
 
-func (b *programBinding) applyOutputs(outputs []programs.Signal, now time.Time, snapshot map[string]*snapshotValue) int {
+func (b *programBinding) applyOutputs(outputs []programs.Signal, now time.Time) int {
 	if len(b.outputs) == 0 {
 		return 0
 	}
@@ -148,39 +149,22 @@ func (b *programBinding) applyOutputs(outputs []programs.Signal, now time.Time, 
 		sig, ok := produced[binding.id]
 		if !ok || !sig.Valid {
 			binding.cell.markInvalid(now, "program_output_invalid", fmt.Sprintf("program %s missing signal %s", b.cfg.ID, binding.id))
-			if snap := snapshot[binding.cell.cfg.ID]; snap != nil {
-				snap.Valid = false
-				snap.Value = nil
-			}
 			errors++
 			continue
 		}
 		if err := binding.cell.setValue(sig.Value, now, nil); err != nil {
 			binding.cell.markInvalid(now, "program_output_error", fmt.Sprintf("program %s: %v", b.cfg.ID, err))
-			if snap := snapshot[binding.cell.cfg.ID]; snap != nil {
-				snap.Valid = false
-				snap.Value = nil
-			}
 			errors++
 			continue
-		}
-		if snap := snapshot[binding.cell.cfg.ID]; snap != nil {
-			snap.Valid = true
-			snap.Value = sig.Value
-			snap.Kind = binding.kind
 		}
 	}
 	return errors
 }
 
-func (b *programBinding) invalidateOutputs(now time.Time, snapshot map[string]*snapshotValue, err error) {
+func (b *programBinding) invalidateOutputs(now time.Time, err error) {
 	message := err.Error()
 	for _, binding := range b.outputs {
 		binding.cell.markInvalid(now, "program_error", fmt.Sprintf("program %s: %s", b.cfg.ID, message))
-		if snap := snapshot[binding.cell.cfg.ID]; snap != nil {
-			snap.Valid = false
-			snap.Value = nil
-		}
 	}
 }
 
@@ -195,24 +179,22 @@ func (s *Service) delta(now time.Time) time.Duration {
 	return delta
 }
 
-func (s *Service) programPhase(now time.Time) int {
+func (s *Service) programPhase(now time.Time, snapshot map[string]*snapshotValue) int {
 	if len(s.programs) == 0 {
 		return 0
 	}
-	snapshot := s.cells.snapshot()
 	ctx := programs.Context{Now: now, Delta: s.delta(now)}
-	errors := 0
-	for _, binding := range s.programs {
+	slots := s.workers.programSlot()
+	errors, _ := runWorkerPool(context.Background(), slots, s.programs, func(_ context.Context, binding *programBinding) int {
 		inputs := binding.prepareInputs(snapshot)
 		outputs, err := binding.program.Execute(ctx, inputs)
 		if err != nil {
-			errors++
 			s.logger.Error().Str("program", binding.cfg.ID).Err(err).Msg("program execution failed")
-			binding.invalidateOutputs(now, snapshot, err)
-			continue
+			binding.invalidateOutputs(now, err)
+			return 1
 		}
-		errors += binding.applyOutputs(outputs, now, snapshot)
-	}
+		return binding.applyOutputs(outputs, now)
+	})
 	return errors
 }
 

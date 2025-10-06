@@ -97,8 +97,8 @@ type ReadGroupConfig struct {
 
 // WriteTargetConfig describes how a cell is pushed to Modbus.
 type WriteTargetConfig struct {
-        ID         string         `yaml:"id"`
-        Cell       string         `yaml:"cell"`
+	ID         string         `yaml:"id"`
+	Cell       string         `yaml:"cell"`
 	Endpoint   EndpointConfig `yaml:"endpoint"`
 	Function   string         `yaml:"function"`
 	Address    uint16         `yaml:"address"`
@@ -112,21 +112,21 @@ type WriteTargetConfig struct {
 
 // ProgramSignalConfig maps a program signal onto a cell.
 type ProgramSignalConfig struct {
-        ID       string      `yaml:"id"`
-        Cell     string      `yaml:"cell"`
-        Type     ValueKind   `yaml:"type,omitempty"`
-        Optional bool        `yaml:"optional,omitempty"`
-        Default  interface{} `yaml:"default,omitempty"`
+	ID       string      `yaml:"id"`
+	Cell     string      `yaml:"cell"`
+	Type     ValueKind   `yaml:"type,omitempty"`
+	Optional bool        `yaml:"optional,omitempty"`
+	Default  interface{} `yaml:"default,omitempty"`
 }
 
 // ProgramConfig describes a reusable processing module.
 type ProgramConfig struct {
-        ID       string                `yaml:"id"`
-        Type     string                `yaml:"type"`
-        Inputs   []ProgramSignalConfig `yaml:"inputs,omitempty"`
-        Outputs  []ProgramSignalConfig `yaml:"outputs,omitempty"`
-        Settings map[string]interface{} `yaml:"settings,omitempty"`
-        Metadata yaml.Node             `yaml:"metadata,omitempty"`
+	ID       string                 `yaml:"id"`
+	Type     string                 `yaml:"type"`
+	Inputs   []ProgramSignalConfig  `yaml:"inputs,omitempty"`
+	Outputs  []ProgramSignalConfig  `yaml:"outputs,omitempty"`
+	Settings map[string]interface{} `yaml:"settings,omitempty"`
+	Metadata yaml.Node              `yaml:"metadata,omitempty"`
 }
 
 // DependencyConfig describes a dependency for a logic block.
@@ -137,13 +137,13 @@ type DependencyConfig struct {
 
 // LogicBlockConfig describes a single logic evaluation block.
 type LogicBlockConfig struct {
-ID           string             `yaml:"id"`
-Target       string             `yaml:"target"`
-Dependencies []DependencyConfig `yaml:"dependencies"`
-Expression   string             `yaml:"expression"`
-Valid        string             `yaml:"valid"`
-Quality      string             `yaml:"quality"`
-Metadata     yaml.Node          `yaml:"metadata,omitempty"`
+	ID           string             `yaml:"id"`
+	Target       string             `yaml:"target"`
+	Dependencies []DependencyConfig `yaml:"dependencies"`
+	Expression   string             `yaml:"expression"`
+	Valid        string             `yaml:"valid"`
+	Quality      string             `yaml:"quality"`
+	Metadata     yaml.Node          `yaml:"metadata,omitempty"`
 }
 
 // HelperFunctionConfig defines a standalone helper function that can be used from logic expressions.
@@ -155,7 +155,7 @@ type HelperFunctionConfig struct {
 
 // DSLConfig configures expression language extensions.
 type DSLConfig struct {
-    Helpers []HelperFunctionConfig `yaml:"helpers,omitempty"`
+	Helpers []HelperFunctionConfig `yaml:"helpers,omitempty"`
 }
 
 // GlobalPolicies configure optional behaviours shared by the controller.
@@ -180,6 +180,14 @@ type LoggingConfig struct {
 	Loki   LokiConfig `yaml:"loki"`
 }
 
+// WorkerSlots configures the concurrency for each pipeline stage.
+type WorkerSlots struct {
+	Read    int `yaml:"read,omitempty"`
+	Program int `yaml:"program,omitempty"`
+	Execute int `yaml:"execute,omitempty"`
+	Write   int `yaml:"write,omitempty"`
+}
+
 // ServerCellConfig maps a cell onto an input register address exposed via the embedded Modbus server.
 type ServerCellConfig struct {
 	Cell    string  `yaml:"cell"`
@@ -198,12 +206,13 @@ type ServerConfig struct {
 
 // Config is the root configuration structure for the service.
 type Config struct {
-        Cycle    Duration               `yaml:"cycle"`
-        Logging  LoggingConfig          `yaml:"logging"`
-        Modules  []string               `yaml:"modules"`
-        Programs []ProgramConfig        `yaml:"programs,omitempty"`
-        Cells    []CellConfig           `yaml:"cells"`
-        Reads    []ReadGroupConfig      `yaml:"reads"`
+	Cycle    Duration               `yaml:"cycle"`
+	Logging  LoggingConfig          `yaml:"logging"`
+	Modules  []string               `yaml:"modules"`
+	Workers  WorkerSlots            `yaml:"workers,omitempty"`
+	Programs []ProgramConfig        `yaml:"programs,omitempty"`
+	Cells    []CellConfig           `yaml:"cells"`
+	Reads    []ReadGroupConfig      `yaml:"reads"`
 	Writes   []WriteTargetConfig    `yaml:"writes"`
 	Logic    []LogicBlockConfig     `yaml:"logic"`
 	DSL      DSLConfig              `yaml:"dsl"`
@@ -335,9 +344,12 @@ func mergeConfig(dst, src *Config) {
 	if src.Logging.Loki.Enabled || src.Logging.Loki.URL != "" || len(src.Logging.Loki.Labels) > 0 {
 		dst.Logging.Loki = src.Logging.Loki
 	}
-    if len(src.DSL.Helpers) > 0 {
-        dst.DSL.Helpers = append(dst.DSL.Helpers, src.DSL.Helpers...)
-    }
+	if src.Workers != (WorkerSlots{}) {
+		dst.Workers = src.Workers
+	}
+	if len(src.DSL.Helpers) > 0 {
+		dst.DSL.Helpers = append(dst.DSL.Helpers, src.DSL.Helpers...)
+	}
 	if len(src.Helpers) > 0 {
 		dst.Helpers = append(dst.Helpers, src.Helpers...)
 	}
@@ -348,9 +360,9 @@ func mergeConfig(dst, src *Config) {
 		dst.Server = src.Server
 	}
 
-        dst.Programs = append(dst.Programs, src.Programs...)
-        dst.Cells = append(dst.Cells, src.Cells...)
-        dst.Reads = append(dst.Reads, src.Reads...)
-        dst.Writes = append(dst.Writes, src.Writes...)
-        dst.Logic = append(dst.Logic, src.Logic...)
+	dst.Programs = append(dst.Programs, src.Programs...)
+	dst.Cells = append(dst.Cells, src.Cells...)
+	dst.Reads = append(dst.Reads, src.Reads...)
+	dst.Writes = append(dst.Writes, src.Writes...)
+	dst.Logic = append(dst.Logic, src.Logic...)
 }
