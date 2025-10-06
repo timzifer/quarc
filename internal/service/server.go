@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/shopspring/decimal"
 
 	"modbus_processor/internal/config"
 )
@@ -248,9 +249,27 @@ func (s *modbusServer) refresh(snapshot map[string]*snapshotValue) {
 				if val, ok := snap.Value.(bool); ok && val {
 					register = 1
 				}
-			case config.ValueKindNumber:
+			case config.ValueKindNumber, config.ValueKindFloat:
 				if val, ok := snap.Value.(float64); ok {
 					register = convertNumberForRegister(val, mapping.scale, mapping.signed)
+				}
+			case config.ValueKindInteger:
+				switch val := snap.Value.(type) {
+				case int64:
+					register = convertNumberForRegister(float64(val), mapping.scale, mapping.signed)
+				case int:
+					register = convertNumberForRegister(float64(val), mapping.scale, mapping.signed)
+				}
+			case config.ValueKindDecimal:
+				switch val := snap.Value.(type) {
+				case decimal.Decimal:
+					f, _ := val.Float64()
+					register = convertNumberForRegister(f, mapping.scale, mapping.signed)
+				case *decimal.Decimal:
+					if val != nil {
+						f, _ := val.Float64()
+						register = convertNumberForRegister(f, mapping.scale, mapping.signed)
+					}
 				}
 			}
 		}

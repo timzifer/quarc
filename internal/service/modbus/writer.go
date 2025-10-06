@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/shopspring/decimal"
 
 	"modbus_processor/internal/config"
 	"modbus_processor/internal/remote"
@@ -123,13 +124,14 @@ func (t *writeTarget) shouldWrite(value interface{}) bool {
 	}
 	cellCfg := t.cell.Config()
 	switch cellCfg.Type {
-	case config.ValueKindBool:
+	case config.ValueKindBool, config.ValueKindString, config.ValueKindDate:
 		return value != lastValue
-	case config.ValueKindString:
-		return value != lastValue
-	case config.ValueKindNumber:
-		current := value.(float64)
-		previous, ok := lastValue.(float64)
+	case config.ValueKindNumber, config.ValueKindFloat:
+		current, ok := toFloat(value)
+		if !ok {
+			return true
+		}
+		previous, ok := toFloat(lastValue)
 		if !ok {
 			return true
 		}
@@ -138,6 +140,35 @@ func (t *writeTarget) shouldWrite(value interface{}) bool {
 			deadband = 0
 		}
 		return math.Abs(current-previous) > deadband
+	case config.ValueKindInteger:
+		current, ok := toInt(value)
+		if !ok {
+			return true
+		}
+		previous, ok := toInt(lastValue)
+		if !ok {
+			return true
+		}
+		deadband := t.cfg.Deadband
+		if deadband < 0 {
+			deadband = 0
+		}
+		return math.Abs(float64(current-previous)) > deadband
+	case config.ValueKindDecimal:
+		current, ok := toDecimalValue(value)
+		if !ok {
+			return true
+		}
+		previous, ok := toDecimalValue(lastValue)
+		if !ok {
+			return true
+		}
+		threshold := decimal.NewFromFloat(t.cfg.Deadband)
+		if threshold.Sign() < 0 {
+			threshold = decimal.Zero
+		}
+		diff := current.Sub(previous).Abs()
+		return diff.Cmp(threshold) > 0
 	default:
 		return true
 	}
@@ -194,7 +225,7 @@ func (t *writeTarget) performWrite(client remote.Client, value interface{}) erro
 		_, err := client.WriteSingleCoil(t.cfg.Address, modbusVal)
 		return err
 	case "holding", "holding_register", "holding_registers":
-		number, ok := value.(float64)
+		number, ok := toFloat(value)
 		if !ok {
 			return fmt.Errorf("expected numeric value for register write, got %T", value)
 		}
@@ -275,4 +306,123 @@ func cloneValue(value interface{}) interface{} {
 
 func (t *writeTarget) Close() {
 	t.closeClient()
+}
+
+func toFloat(value interface{}) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, false
+		}
+		return v, true
+	case float32:
+		return toFloat(float64(v))
+	case int:
+		return float64(v), true
+	case int8:
+		return float64(v), true
+	case int16:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case uint:
+		return float64(v), true
+	case uint8:
+		return float64(v), true
+	case uint16:
+		return float64(v), true
+	case uint32:
+		return float64(v), true
+	case uint64:
+		return float64(v), true
+	case decimal.Decimal:
+		f, exact := v.Float64()
+		if !exact {
+			return f, true
+		}
+		return f, true
+	case *decimal.Decimal:
+		if v == nil {
+			return 0, false
+		}
+		return toFloat(*v)
+	default:
+		return 0, false
+	}
+}
+
+func toInt(value interface{}) (int64, bool) {
+	switch v := value.(type) {
+	case int:
+		return int64(v), true
+	case int8:
+		return int64(v), true
+	case int16:
+		return int64(v), true
+	case int32:
+		return int64(v), true
+	case int64:
+		return v, true
+	case uint:
+		return int64(v), true
+	case uint8:
+		return int64(v), true
+	case uint16:
+		return int64(v), true
+	case uint32:
+		return int64(v), true
+	case uint64:
+		if v > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(v), true
+	default:
+		return 0, false
+	}
+}
+
+func toDecimalValue(value interface{}) (decimal.Decimal, bool) {
+	switch v := value.(type) {
+	case decimal.Decimal:
+		return v, true
+	case *decimal.Decimal:
+		if v == nil {
+			return decimal.Zero, false
+		}
+		return *v, true
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return decimal.Zero, false
+		}
+		return decimal.RequireFromString(fmt.Sprintf("%g", v)), true
+	case float32:
+		return decimal.RequireFromString(fmt.Sprintf("%g", v)), true
+	case int:
+		return decimal.NewFromInt(int64(v)), true
+	case int8:
+		return decimal.NewFromInt(int64(v)), true
+	case int16:
+		return decimal.NewFromInt(int64(v)), true
+	case int32:
+		return decimal.NewFromInt(int64(v)), true
+	case int64:
+		return decimal.NewFromInt(v), true
+	case uint:
+		return decimal.NewFromInt(int64(v)), true
+	case uint8:
+		return decimal.NewFromInt(int64(v)), true
+	case uint16:
+		return decimal.NewFromInt(int64(v)), true
+	case uint32:
+		return decimal.NewFromInt(int64(v)), true
+	case uint64:
+		if v > math.MaxInt64 {
+			return decimal.Zero, false
+		}
+		return decimal.NewFromInt(int64(v)), true
+	default:
+		return decimal.Zero, false
+	}
 }

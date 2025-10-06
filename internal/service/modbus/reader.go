@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/shopspring/decimal"
 
 	"modbus_processor/internal/config"
 	"modbus_processor/internal/remote"
@@ -234,14 +235,28 @@ func (s *readSignal) apply(raw []byte, function string, ts time.Time) error {
 			return err
 		}
 		return s.cell.SetValue(value, ts, nil)
-	case config.ValueKindNumber:
+	case config.ValueKindNumber, config.ValueKindFloat:
 		value, err := s.numberValue(raw, function)
+		if err != nil {
+			return err
+		}
+		return s.cell.SetValue(value, ts, nil)
+	case config.ValueKindInteger:
+		value, err := s.integerValue(raw, function)
+		if err != nil {
+			return err
+		}
+		return s.cell.SetValue(value, ts, nil)
+	case config.ValueKindDecimal:
+		value, err := s.decimalValue(raw, function)
 		if err != nil {
 			return err
 		}
 		return s.cell.SetValue(value, ts, nil)
 	case config.ValueKindString:
 		return fmt.Errorf("string decoding from modbus not implemented")
+	case config.ValueKindDate:
+		return fmt.Errorf("date decoding from modbus not implemented")
 	default:
 		return fmt.Errorf("unsupported value kind %q", s.cfg.Type)
 	}
@@ -293,6 +308,44 @@ func (s *readSignal) numberValue(raw []byte, function string) (float64, error) {
 		return float64(word) * scale, nil
 	default:
 		return 0, fmt.Errorf("unsupported numeric function %q", function)
+	}
+}
+
+func (s *readSignal) integerValue(raw []byte, function string) (int64, error) {
+	switch strings.ToLower(function) {
+	case "holding", "holding_register", "holding_registers", "input", "input_register", "input_registers":
+		word, err := s.readWord(raw)
+		if err != nil {
+			return 0, err
+		}
+		if s.cfg.Signed {
+			return int64(int16(word)), nil
+		}
+		return int64(word), nil
+	default:
+		return 0, fmt.Errorf("unsupported integer function %q", function)
+	}
+}
+
+func (s *readSignal) decimalValue(raw []byte, function string) (decimal.Decimal, error) {
+	switch strings.ToLower(function) {
+	case "holding", "holding_register", "holding_registers", "input", "input_register", "input_registers":
+		word, err := s.readWord(raw)
+		if err != nil {
+			return decimal.Zero, err
+		}
+		scale := s.cfg.Scale
+		if scale == 0 {
+			scale = 1
+		}
+		base := decimal.NewFromInt(int64(word))
+		if s.cfg.Signed {
+			base = decimal.NewFromInt(int64(int16(word)))
+		}
+		scaled := base.Mul(decimal.RequireFromString(fmt.Sprintf("%g", scale)))
+		return scaled, nil
+	default:
+		return decimal.Zero, fmt.Errorf("unsupported decimal function %q", function)
 	}
 }
 

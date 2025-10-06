@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
+
+	"github.com/shopspring/decimal"
 
 	"modbus_processor/internal/config"
 	serviceio "modbus_processor/internal/service/io"
@@ -225,41 +228,12 @@ func convertValue(kind config.ValueKind, value interface{}) (interface{}, error)
 		default:
 			return nil, fmt.Errorf("expected bool-compatible value, got %T", value)
 		}
-	case config.ValueKindNumber:
-		switch v := value.(type) {
-		case float64:
-			if math.IsNaN(v) || math.IsInf(v, 0) {
-				return nil, fmt.Errorf("invalid float value %v", v)
-			}
-			return v, nil
-		case float32:
-			return float64(v), nil
-		case int:
-			return float64(v), nil
-		case int8:
-			return float64(v), nil
-		case int16:
-			return float64(v), nil
-		case int32:
-			return float64(v), nil
-		case int64:
-			return float64(v), nil
-		case uint16:
-			return float64(v), nil
-		case uint8:
-			return float64(v), nil
-		case uint32:
-			return float64(v), nil
-		case uint64:
-			return float64(v), nil
-		case bool:
-			if v {
-				return float64(1), nil
-			}
-			return float64(0), nil
-		default:
-			return nil, fmt.Errorf("expected number-compatible value, got %T", value)
-		}
+	case config.ValueKindNumber, config.ValueKindFloat:
+		return convertFloatValue(value)
+	case config.ValueKindInteger:
+		return convertIntegerValue(value)
+	case config.ValueKindDecimal:
+		return convertDecimalValue(value)
 	case config.ValueKindString:
 		switch v := value.(type) {
 		case string:
@@ -267,8 +241,169 @@ func convertValue(kind config.ValueKind, value interface{}) (interface{}, error)
 		default:
 			return nil, fmt.Errorf("expected string value, got %T", value)
 		}
+	case config.ValueKindDate:
+		return convertDateValue(value)
 	default:
 		return nil, fmt.Errorf("unsupported value kind %q", kind)
+	}
+}
+
+func convertFloatValue(value interface{}) (float64, error) {
+	switch v := value.(type) {
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, fmt.Errorf("invalid float value %v", v)
+		}
+		return v, nil
+	case float32:
+		return convertFloatValue(float64(v))
+	case int:
+		return float64(v), nil
+	case int8:
+		return float64(v), nil
+	case int16:
+		return float64(v), nil
+	case int32:
+		return float64(v), nil
+	case int64:
+		return float64(v), nil
+	case uint:
+		return float64(v), nil
+	case uint8:
+		return float64(v), nil
+	case uint16:
+		return float64(v), nil
+	case uint32:
+		return float64(v), nil
+	case uint64:
+		return float64(v), nil
+	case bool:
+		if v {
+			return 1, nil
+		}
+		return 0, nil
+	case string:
+		parsed, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return 0, fmt.Errorf("parse float from string: %w", err)
+		}
+		return parsed, nil
+	default:
+		return 0, fmt.Errorf("expected number-compatible value, got %T", value)
+	}
+}
+
+func convertIntegerValue(value interface{}) (int64, error) {
+	switch v := value.(type) {
+	case int:
+		return int64(v), nil
+	case int8:
+		return int64(v), nil
+	case int16:
+		return int64(v), nil
+	case int32:
+		return int64(v), nil
+	case int64:
+		return v, nil
+	case uint:
+		return int64(v), nil
+	case uint8:
+		return int64(v), nil
+	case uint16:
+		return int64(v), nil
+	case uint32:
+		return int64(v), nil
+	case uint64:
+		if v > math.MaxInt64 {
+			return 0, fmt.Errorf("value %d overflows int64", v)
+		}
+		return int64(v), nil
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, fmt.Errorf("invalid float value %v", v)
+		}
+		return int64(v), nil
+	case float32:
+		return int64(v), nil
+	case string:
+		parsed, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("parse integer from string: %w", err)
+		}
+		return parsed, nil
+	default:
+		return 0, fmt.Errorf("expected integer-compatible value, got %T", value)
+	}
+}
+
+func convertDecimalValue(value interface{}) (decimal.Decimal, error) {
+	switch v := value.(type) {
+	case decimal.Decimal:
+		return v, nil
+	case *decimal.Decimal:
+		if v == nil {
+			return decimal.Zero, fmt.Errorf("decimal pointer is nil")
+		}
+		return *v, nil
+	case int:
+		return decimal.NewFromInt(int64(v)), nil
+	case int8:
+		return decimal.NewFromInt(int64(v)), nil
+	case int16:
+		return decimal.NewFromInt(int64(v)), nil
+	case int32:
+		return decimal.NewFromInt(int64(v)), nil
+	case int64:
+		return decimal.NewFromInt(v), nil
+	case uint:
+		return decimal.NewFromInt(int64(v)), nil
+	case uint8:
+		return decimal.NewFromInt(int64(v)), nil
+	case uint16:
+		return decimal.NewFromInt(int64(v)), nil
+	case uint32:
+		return decimal.NewFromInt(int64(v)), nil
+	case uint64:
+		if v > math.MaxInt64 {
+			return decimal.Zero, fmt.Errorf("value %d overflows supported range", v)
+		}
+		return decimal.NewFromInt(int64(v)), nil
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return decimal.Zero, fmt.Errorf("invalid float value %v", v)
+		}
+		return decimal.RequireFromString(strconv.FormatFloat(v, 'f', -1, 64)), nil
+	case float32:
+		return decimal.RequireFromString(strconv.FormatFloat(float64(v), 'f', -1, 32)), nil
+	case string:
+		dec, err := decimal.NewFromString(v)
+		if err != nil {
+			return decimal.Zero, fmt.Errorf("parse decimal from string: %w", err)
+		}
+		return dec, nil
+	default:
+		return decimal.Zero, fmt.Errorf("expected decimal-compatible value, got %T", value)
+	}
+}
+
+func convertDateValue(value interface{}) (time.Time, error) {
+	switch v := value.(type) {
+	case time.Time:
+		return v, nil
+	case string:
+		if v == "" {
+			return time.Time{}, fmt.Errorf("date string is empty")
+		}
+		layouts := []string{time.RFC3339, "2006-01-02", time.RFC3339Nano}
+		for _, layout := range layouts {
+			parsed, err := time.Parse(layout, v)
+			if err == nil {
+				return parsed, nil
+			}
+		}
+		return time.Time{}, fmt.Errorf("parse date value %q: unsupported format", v)
+	default:
+		return time.Time{}, fmt.Errorf("expected date-compatible value, got %T", value)
 	}
 }
 

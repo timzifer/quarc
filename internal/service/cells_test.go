@@ -2,6 +2,9 @@ package service
 
 import (
 	"testing"
+	"time"
+
+	"github.com/shopspring/decimal"
 
 	"modbus_processor/internal/config"
 )
@@ -36,5 +39,34 @@ func TestNewCellStoreConstantTypeMismatch(t *testing.T) {
 	}})
 	if err == nil {
 		t.Fatalf("expected error for mismatched constant type")
+	}
+}
+
+func TestConvertValueExtendedTypes(t *testing.T) {
+	t.Helper()
+	val, err := convertValue(config.ValueKindInteger, int32(10))
+	if err != nil {
+		t.Fatalf("convert integer: %v", err)
+	}
+	if got := val.(int64); got != 10 {
+		t.Fatalf("expected 10, got %d", got)
+	}
+
+	decVal, err := convertValue(config.ValueKindDecimal, "12.345")
+	if err != nil {
+		t.Fatalf("convert decimal: %v", err)
+	}
+	dec := decVal.(decimal.Decimal)
+	if dec.String() != "12.345" {
+		t.Fatalf("expected decimal 12.345, got %s", dec.String())
+	}
+
+	dateVal, err := convertValue(config.ValueKindDate, "2024-01-02")
+	if err != nil {
+		t.Fatalf("convert date: %v", err)
+	}
+	expected := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
+	if !dateVal.(time.Time).Equal(expected) {
+		t.Fatalf("expected %v, got %v", expected, dateVal)
 	}
 }
