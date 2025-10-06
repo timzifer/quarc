@@ -525,6 +525,20 @@ const logicBody = document.querySelector('#logic tbody');
 const readsBody = document.querySelector('#reads tbody');
 const writesBody = document.querySelector('#writes tbody');
 let isPaused = false;
+let refreshTimer = null;
+
+function startUpdateLoop() {
+  if (refreshTimer === null) {
+    refreshTimer = setInterval(fetchState, 1000);
+  }
+}
+
+function stopUpdateLoop() {
+  if (refreshTimer !== null) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
 
 function updateDurationLabel(ms) {
   durationValue.textContent = ms + ' ms';
@@ -751,11 +765,19 @@ function updateControllerStatus(control) {
   if (!control) {
     statusBox.textContent = '';
     statusBox.classList.remove('paused');
+    isPaused = false;
+    startUpdateLoop();
     return false;
   }
   const paused = control.mode === 'pause';
   statusBox.textContent = paused ? 'Pause' : 'Run';
   statusBox.className = 'status-indicator' + (paused ? ' paused' : '');
+  isPaused = paused;
+  if (paused) {
+    stopUpdateLoop();
+  } else {
+    startUpdateLoop();
+  }
   return paused;
 }
 
@@ -766,8 +788,8 @@ function fetchState() {
       if (data.control && typeof data.control.interval_ms === 'number') {
         updateDurationLabel(data.control.interval_ms);
       }
-      isPaused = updateControllerStatus(data.control);
-      renderCells(data.cells || [], isPaused);
+      const paused = updateControllerStatus(data.control);
+      renderCells(data.cells || [], paused);
       renderMetrics(data.metrics);
       renderSystem(data.system);
       renderLogic(data.logic);
@@ -792,7 +814,7 @@ function postControl(action, payload) {
     if (status && typeof status.interval_ms === 'number') {
       updateDurationLabel(status.interval_ms);
     }
-    isPaused = updateControllerStatus(status);
+    updateControllerStatus(status);
     return status;
   });
 }
@@ -949,8 +971,8 @@ document.getElementById('writes').addEventListener('click', function(event) {
 });
 
 updateDurationLabel(speedRange.value);
+startUpdateLoop();
 fetchState();
-setInterval(fetchState, 1000);
 </script>
 </body>
 </html>`))
