@@ -243,7 +243,7 @@ func (s *Service) SetCellValue(id string, value interface{}) error {
 		return err
 	}
 	now := time.Now()
-	if err := cell.setValue(value, now); err != nil {
+	if err := cell.setValue(value, now, nil); err != nil {
 		return err
 	}
 	if s.server != nil {

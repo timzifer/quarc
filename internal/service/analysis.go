@@ -13,20 +13,22 @@ import (
 type DependencyReport struct {
 	Cell               string
 	Type               config.ValueKind
-	InNormal           bool
-	InFallback         bool
+	InExpression       bool
+	InValid            bool
+	InQuality          bool
 	ManuallyConfigured bool
 	Resolved           bool
 }
 
 type LogicBlockReport struct {
-	ID                 string
-	Target             string
-	TargetType         config.ValueKind
-	NormalExpression   string
-	FallbackExpression string
-	Dependencies       []DependencyReport
-	Errors             []string
+	ID           string
+	Target       string
+	TargetType   config.ValueKind
+	Expression   string
+	Valid        string
+	Quality      string
+	Dependencies []DependencyReport
+	Errors       []string
 }
 
 func AnalyzeLogic(cfg *config.Config) ([]LogicBlockReport, error) {
@@ -46,10 +48,11 @@ func AnalyzeLogic(cfg *config.Config) ([]LogicBlockReport, error) {
 	reports := make([]LogicBlockReport, 0, len(cfg.Logic))
 	for idx, blockCfg := range cfg.Logic {
 		report := LogicBlockReport{
-			ID:                 blockCfg.ID,
-			Target:             blockCfg.Target,
-			NormalExpression:   strings.TrimSpace(blockCfg.Normal),
-			FallbackExpression: strings.TrimSpace(blockCfg.Fallback),
+			ID:         blockCfg.ID,
+			Target:     blockCfg.Target,
+			Expression: strings.TrimSpace(blockCfg.Expression),
+			Valid:      strings.TrimSpace(blockCfg.Valid),
+			Quality:    strings.TrimSpace(blockCfg.Quality),
 		}
 
 		block, meta, buildErr := prepareLogicBlock(blockCfg, cells, dsl, idx)
@@ -77,8 +80,9 @@ func buildDependencyReport(meta map[string]*dependencyMeta) []DependencyReport {
 		}
 		dep := DependencyReport{
 			Cell:               id,
-			InNormal:           entry.normal,
-			InFallback:         entry.fallback,
+			InExpression:       entry.expression,
+			InValid:            entry.valid,
+			InQuality:          entry.quality,
 			ManuallyConfigured: entry.configured,
 		}
 		if entry.cell != nil {

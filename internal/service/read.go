@@ -164,13 +164,13 @@ func (s *readSignal) apply(raw []byte, function string, ts time.Time) error {
 		if err != nil {
 			return err
 		}
-		return s.cell.setValue(value, ts)
+		return s.cell.setValue(value, ts, nil)
 	case config.ValueKindNumber:
 		value, err := s.numberValue(raw, function)
 		if err != nil {
 			return err
 		}
-		return s.cell.setValue(value, ts)
+		return s.cell.setValue(value, ts, nil)
 	case config.ValueKindString:
 		return fmt.Errorf("string decoding from modbus not implemented")
 	default:

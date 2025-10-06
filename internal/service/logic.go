@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,41 +21,37 @@ type logicDependency struct {
 }
 
 type logicBlock struct {
-	cfg                   config.LogicBlockConfig
-	target                *cell
-	deps                  []logicDependency
-	normal                *vm.Program
-	fallback              *vm.Program
-	dsl                   *dslEngine
-	order                 int
-	normalDependencyIDs   []string
-	fallbackDependencyIDs []string
+	cfg                     config.LogicBlockConfig
+	target                  *cell
+	deps                    []logicDependency
+	expression              *vm.Program
+	validExpr               *vm.Program
+	qualityExpr             *vm.Program
+	dsl                     *dslEngine
+	order                   int
+	expressionDependencyIDs []string
+	validDependencyIDs      []string
+	qualityDependencyIDs    []string
 }
 
-type evaluationResult struct {
-	success  bool
-	fallback bool
-	diag     *diagnosis
-	value    interface{}
-	err      error
-}
-
-type successSignal struct {
-	value interface{}
-}
-
-func (successSignal) Error() string { return "success" }
-
-type failSignal struct {
+type validationResult struct {
+	valid   bool
+	quality *float64
 	code    string
 	message string
 }
 
-func (failSignal) Error() string { return "fail" }
+type evaluationError struct {
+	Code    string
+	Message string
+}
 
-type fallbackSignal struct{}
-
-func (fallbackSignal) Error() string { return "fallback" }
+func (e evaluationError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	return e.Code
+}
 
 func newLogicBlocks(cfgs []config.LogicBlockConfig, cells *cellStore, dsl *dslEngine, logger zerolog.Logger) ([]*logicBlock, []*logicBlock, error) {
 	blocks := make([]*logicBlock, 0, len(cfgs))
@@ -67,19 +64,26 @@ func newLogicBlocks(cfgs []config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 			return nil, nil, err
 		}
 
-		if block.normal != nil {
+		if block.expression != nil {
 			logicLogger.Debug().
 				Str("block", cfg.ID).
-				Str("expression", strings.TrimSpace(cfg.Normal)).
-				Strs("dependencies", block.normalDependencyIDs).
-				Msg("logic block normal expression")
+				Str("expression", strings.TrimSpace(cfg.Expression)).
+				Strs("dependencies", block.expressionDependencyIDs).
+				Msg("logic block expression")
 		}
-		if block.fallback != nil {
+		if block.validExpr != nil {
 			logicLogger.Debug().
 				Str("block", cfg.ID).
-				Str("expression", strings.TrimSpace(cfg.Fallback)).
-				Strs("dependencies", block.fallbackDependencyIDs).
-				Msg("logic block fallback expression")
+				Str("expression", strings.TrimSpace(cfg.Valid)).
+				Strs("dependencies", block.validDependencyIDs).
+				Msg("logic block valid expression")
+		}
+		if block.qualityExpr != nil {
+			logicLogger.Debug().
+				Str("block", cfg.ID).
+				Str("expression", strings.TrimSpace(cfg.Quality)).
+				Strs("dependencies", block.qualityDependencyIDs).
+				Msg("logic block quality expression")
 		}
 
 		if existing, ok := producers[cfg.Target]; ok {
@@ -98,8 +102,9 @@ func newLogicBlocks(cfgs []config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 }
 
 type dependencyMeta struct {
-	normal     bool
-	fallback   bool
+	expression bool
+	valid      bool
+	quality    bool
 	configured bool
 	cell       *cell
 }
@@ -130,15 +135,16 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 	}
 	block.target = target
 
-	normalIDs := make(map[string]struct{})
-	fallbackIDs := make(map[string]struct{})
+	expressionIDs := make(map[string]struct{})
+	validIDs := make(map[string]struct{})
+	qualityIDs := make(map[string]struct{})
 
 	for _, depCfg := range cfg.Dependencies {
 		entry := ensure(depCfg.Cell)
 		if entry == nil {
 			continue
 		}
-		entry.normal = true
+		entry.expression = true
 		entry.configured = true
 		depCell, depErr := cells.mustGet(depCfg.Cell)
 		if depErr != nil {
@@ -148,7 +154,7 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 			return block, meta, fmt.Errorf("logic block %s dependency %s expects %s but cell is %s", cfg.ID, depCfg.Cell, depCfg.Type, depCell.cfg.Type)
 		}
 		entry.cell = depCell
-		normalIDs[depCfg.Cell] = struct{}{}
+		expressionIDs[depCfg.Cell] = struct{}{}
 	}
 
 	var helperNames map[string]struct{}
@@ -156,35 +162,51 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 		helperNames = dsl.helperNames()
 	}
 
-	if cfg.Normal != "" {
-		program, err := dsl.compileExpression(cfg.Normal)
+	if strings.TrimSpace(cfg.Expression) != "" {
+		program, err := dsl.compileExpression(cfg.Expression)
 		if err != nil {
-			return block, meta, fmt.Errorf("logic block %s normal: %w", cfg.ID, err)
+			return block, meta, fmt.Errorf("logic block %s expression: %w", cfg.ID, err)
 		}
-		block.normal = program
-		for _, dep := range uniqueDependencies(program, false, helperNames) {
+		block.expression = program
+		for _, dep := range uniqueDependencies(program, helperNames) {
 			entry := ensure(dep)
 			if entry == nil {
 				continue
 			}
-			entry.normal = true
-			normalIDs[dep] = struct{}{}
+			entry.expression = true
+			expressionIDs[dep] = struct{}{}
 		}
 	}
 
-	if cfg.Fallback != "" {
-		program, err := dsl.compileExpression(cfg.Fallback)
+	if strings.TrimSpace(cfg.Valid) != "" {
+		program, err := dsl.compileExpression(cfg.Valid)
 		if err != nil {
-			return block, meta, fmt.Errorf("logic block %s fallback: %w", cfg.ID, err)
+			return block, meta, fmt.Errorf("logic block %s valid: %w", cfg.ID, err)
 		}
-		block.fallback = program
-		for _, dep := range uniqueDependencies(program, true, helperNames) {
+		block.validExpr = program
+		for _, dep := range uniqueDependencies(program, helperNames) {
 			entry := ensure(dep)
 			if entry == nil {
 				continue
 			}
-			entry.fallback = true
-			fallbackIDs[dep] = struct{}{}
+			entry.valid = true
+			validIDs[dep] = struct{}{}
+		}
+	}
+
+	if strings.TrimSpace(cfg.Quality) != "" {
+		program, err := dsl.compileExpression(cfg.Quality)
+		if err != nil {
+			return block, meta, fmt.Errorf("logic block %s quality: %w", cfg.ID, err)
+		}
+		block.qualityExpr = program
+		for _, dep := range uniqueDependencies(program, helperNames) {
+			entry := ensure(dep)
+			if entry == nil {
+				continue
+			}
+			entry.quality = true
+			qualityIDs[dep] = struct{}{}
 		}
 	}
 
@@ -195,10 +217,12 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 		depCell, depErr := cells.mustGet(id)
 		if depErr != nil {
 			switch {
-			case entry.normal:
+			case entry.expression:
 				return block, meta, fmt.Errorf("logic block %s dependency %s: %w", cfg.ID, id, depErr)
-			case entry.fallback:
-				return block, meta, fmt.Errorf("logic block %s fallback dependency %s: %w", cfg.ID, id, depErr)
+			case entry.valid:
+				return block, meta, fmt.Errorf("logic block %s valid dependency %s: %w", cfg.ID, id, depErr)
+			case entry.quality:
+				return block, meta, fmt.Errorf("logic block %s quality dependency %s: %w", cfg.ID, id, depErr)
 			default:
 				return block, meta, fmt.Errorf("logic block %s dependency %s: %w", cfg.ID, id, depErr)
 			}
@@ -206,11 +230,12 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 		entry.cell = depCell
 	}
 
-	block.normalDependencyIDs = sortKeys(normalIDs)
-	block.fallbackDependencyIDs = sortKeys(fallbackIDs)
+	block.expressionDependencyIDs = sortKeys(expressionIDs)
+	block.validDependencyIDs = sortKeys(validIDs)
+	block.qualityDependencyIDs = sortKeys(qualityIDs)
 
-	deps := make([]logicDependency, 0, len(block.normalDependencyIDs))
-	for _, id := range block.normalDependencyIDs {
+	deps := make([]logicDependency, 0, len(block.expressionDependencyIDs))
+	for _, id := range block.expressionDependencyIDs {
 		entry := meta[id]
 		if entry == nil || entry.cell == nil {
 			continue
@@ -232,19 +257,26 @@ func sortKeys(values map[string]struct{}) []string {
 }
 
 var reservedIdentifiers = map[string]struct{}{
-	"success":  {},
-	"fail":     {},
-	"fallback": {},
-	"value":    {},
-	"valid":    {},
+	"value":         {},
+	"valid":         {},
+	"dump":          {},
+	"log":           {},
+	"result":        {},
+	"has_error":     {},
+	"error":         {},
+	"cell":          {},
+	"value_fn":      {},
+	"error_code":    {},
+	"error_message": {},
+	"error_raw":     {},
 }
 
-func uniqueDependencies(program *vm.Program, allowValid bool, helpers map[string]struct{}) []string {
+func uniqueDependencies(program *vm.Program, helpers map[string]struct{}) []string {
 	if program == nil {
 		return nil
 	}
 	node := program.Node()
-	collector := &dependencyCollector{allowValid: allowValid, helpers: helpers}
+	collector := &dependencyCollector{helpers: helpers}
 	collector.walk(node)
 	deps := make([]string, 0, len(collector.names))
 	for name := range collector.names {
@@ -255,10 +287,9 @@ func uniqueDependencies(program *vm.Program, allowValid bool, helpers map[string
 }
 
 type dependencyCollector struct {
-	allowValid bool
-	names      map[string]struct{}
-	locals     map[string]int
-	helpers    map[string]struct{}
+	names   map[string]struct{}
+	locals  map[string]int
+	helpers map[string]struct{}
 }
 
 func (c *dependencyCollector) walk(node ast.Node) {
@@ -296,12 +327,8 @@ func (c *dependencyCollector) walk(node ast.Node) {
 		}
 		if ident, ok := n.Callee.(*ast.IdentifierNode); ok {
 			switch ident.Value {
-			case "value":
+			case "value", "valid", "cell", "value_fn":
 				c.collectCallArgs(n)
-			case "valid":
-				if c.allowValid {
-					c.collectCallArgs(n)
-				}
 			}
 		}
 	case *ast.BuiltinNode:
@@ -346,12 +373,8 @@ func (c *dependencyCollector) Visit(node *ast.Node) {
 	case *ast.CallNode:
 		if ident, ok := n.Callee.(*ast.IdentifierNode); ok {
 			switch ident.Value {
-			case "value":
+			case "value", "valid", "cell", "value_fn":
 				c.collectCallArgs(n)
-			case "valid":
-				if c.allowValid {
-					c.collectCallArgs(n)
-				}
 			}
 		}
 	}
@@ -470,64 +493,73 @@ func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue,
 		return 0
 	}
 
-	logger.Trace().Str("block", b.cfg.ID).Msg("logic block evaluation started")
+	blockLogger := logger.With().Str("block", b.cfg.ID).Logger()
+	blockLogger.Trace().Msg("logic block evaluation started")
 
 	ready := b.dependenciesReady(snapshot)
-	var result evaluationResult
-	if ready && b.normal != nil {
-		result = b.runProgram(now, snapshot, b.normal, false, b.cfg.Normal, "normal")
-		if result.err != nil {
-			logger.Error().Err(result.err).Str("block", b.cfg.ID).Msg("normal evaluation failed")
-			errors++
-		}
-		if result.fallback {
-			ready = false
-		}
-	} else {
-		ready = false
-	}
+	var (
+		value   interface{}
+		evalErr error
+	)
 
-	if !ready {
-		if b.fallback != nil {
-			result = b.runProgram(now, snapshot, b.fallback, true, b.cfg.Fallback, "fallback")
-			if result.err != nil {
-				logger.Error().Err(result.err).Str("block", b.cfg.ID).Msg("fallback evaluation failed")
-				errors++
-			}
-		} else {
-			result = evaluationResult{success: false, diag: &diagnosis{Code: "logic.fallback_missing", Message: "no fallback available", Timestamp: now}}
-			errors++
+	switch {
+	case !ready:
+		evalErr = evaluationError{Code: "logic.dependencies", Message: "dependencies invalid"}
+	case b.expression == nil:
+		evalErr = evaluationError{Code: "logic.expression_missing", Message: "no expression configured"}
+	default:
+		value, evalErr = b.runExpression(snapshot)
+		if evalErr != nil {
+			blockLogger.Debug().Err(evalErr).Msg("expression evaluation failed")
 		}
 	}
 
-	if result.success {
-		logger.Trace().Str("block", b.cfg.ID).Bool("success", true).Msg("logic block evaluation completed")
-		if err := b.target.setValue(result.value, now); err != nil {
-			logger.Error().Err(err).Str("block", b.cfg.ID).Msg("assign result")
+	decision, valErr := b.runValidation(snapshot, value, evalErr)
+	if valErr != nil {
+		blockLogger.Error().Err(valErr).Msg("validate evaluation failed")
+		b.target.markInvalid(now, "logic.validate_error", valErr.Error())
+		snapshot[b.target.cfg.ID] = b.target.asSnapshotValue()
+		errors++
+		return errors
+	}
+
+	if evalErr != nil && decision.valid {
+		blockLogger.Warn().Err(evalErr).Msg("validator ignored expression error")
+		decision.valid = false
+	}
+
+	if decision.valid {
+		if err := b.target.setValue(value, now, decision.quality); err != nil {
+			blockLogger.Error().Err(err).Msg("assign result")
 			b.target.markInvalid(now, "logic.assign", err.Error())
 			snapshot[b.target.cfg.ID] = b.target.asSnapshotValue()
 			errors++
 			return errors
 		}
 		snapshot[b.target.cfg.ID] = b.target.asSnapshotValue()
+		blockLogger.Trace().Bool("success", true).Msg("logic block evaluation completed")
 		return errors
 	}
 
-	if result.diag != nil {
-		b.target.markInvalid(now, result.diag.Code, result.diag.Message)
+	diag := decision.diagnosis(now)
+	if diag == nil && evalErr != nil {
+		diag = evaluationErrorDiagnosis(evalErr, now)
+	}
+	if diag != nil {
+		b.target.markInvalid(now, diag.Code, diag.Message)
 	} else {
 		b.target.markInvalid(now, "logic.invalid", "evaluation failed")
-		errors++
 	}
 	snapshot[b.target.cfg.ID] = b.target.asSnapshotValue()
-	logger.Trace().Str("block", b.cfg.ID).Bool("success", false).Msg("logic block evaluation completed")
+	blockLogger.Trace().Bool("success", false).Msg("logic block evaluation completed")
+	errors++
 	return errors
 }
 
 func (b *logicBlock) dependenciesReady(snapshot map[string]*snapshotValue) bool {
 	for _, dep := range b.deps {
 		snap := snapshot[dep.cell.cfg.ID]
-		if snap == nil || !snap.Valid {
+		if snap == nil {
 			return false
 		}
 		if snap.Kind != dep.kind {
@@ -537,7 +569,10 @@ func (b *logicBlock) dependenciesReady(snapshot map[string]*snapshotValue) bool 
 	return true
 }
 
-func (b *logicBlock) runProgram(now time.Time, snapshot map[string]*snapshotValue, program *vm.Program, fallback bool, expression string, expressionKind string) evaluationResult {
+func (b *logicBlock) runExpression(snapshot map[string]*snapshotValue) (interface{}, error) {
+	if b.expression == nil {
+		return nil, evaluationError{Code: "logic.expression_missing", Message: "no expression configured"}
+	}
 	env := make(map[string]interface{}, len(snapshot)+5)
 	for id, value := range snapshot {
 		if value != nil {
@@ -545,7 +580,7 @@ func (b *logicBlock) runProgram(now time.Time, snapshot map[string]*snapshotValu
 		}
 	}
 
-	trimmedExpr := strings.TrimSpace(expression)
+	trimmedExpr := strings.TrimSpace(b.cfg.Expression)
 	blockLogger := b.dsl.logger.With().
 		Str("block", b.cfg.ID).
 		Logger()
@@ -555,47 +590,321 @@ func (b *logicBlock) runProgram(now time.Time, snapshot map[string]*snapshotValu
 		originKind:     "logic",
 		originID:       b.cfg.ID,
 		expression:     trimmedExpr,
-		expressionKind: expressionKind,
+		expressionKind: "expression",
 	}
 	env["value"] = ctx.value
-	env["success"] = ctx.success
-	env["fail"] = ctx.fail
-	env["fallback"] = ctx.fallback
-	if fallback {
-		env["valid"] = ctx.valid
-	}
+	env["cell"] = ctx.value
+	env["value_fn"] = ctx.value
+	env["valid"] = ctx.valid
 	env["dump"] = ctx.dump
 	env["log"] = ctx.log
 	if b.dsl != nil {
 		b.dsl.injectHelpers(env)
 	}
 
-	result := evaluationResult{}
-
-	_, err := vm.Run(program, env)
+	result, err := vm.Run(b.expression, env)
 	if err != nil {
-		var success successSignal
-		if errors.As(err, &success) {
-			result.success = true
-			result.value = success.value
-			return result
+		return nil, normalizeEvaluationError(err)
+	}
+	return result, nil
+}
+
+func (b *logicBlock) runValidation(snapshot map[string]*snapshotValue, value interface{}, evalErr error) (validationResult, error) {
+	decision := defaultValidation(evalErr)
+
+	applyOutcome := func(program *vm.Program, expr, kind string, handler func(interface{}) error) error {
+		if program == nil {
+			return nil
 		}
-		var fail failSignal
-		if errors.As(err, &fail) {
-			result.diag = &diagnosis{Code: fail.code, Message: fail.message, Timestamp: now}
-			return result
+		env := b.buildValidationEnv(snapshot, value, evalErr, expr, kind)
+		outcome, err := vm.Run(program, env)
+		if err != nil {
+			if evalSignal, ok := asEvaluationError(err); ok {
+				decision.valid = false
+				decision.code = evalSignal.Code
+				decision.message = evalSignal.Message
+				return nil
+			}
+			return err
 		}
-		var fb fallbackSignal
-		if errors.As(err, &fb) {
-			result.fallback = true
-			return result
+		if handler != nil {
+			return handler(outcome)
 		}
-		result.err = err
-		return result
+		return nil
 	}
 
-	result.diag = &diagnosis{Code: "logic.no_success", Message: "expression completed without success()", Timestamp: now}
-	return result
+	if err := applyOutcome(b.validExpr, b.cfg.Valid, "valid", func(outcome interface{}) error {
+		decision = applyValidationOutcome(decision, outcome)
+		return nil
+	}); err != nil {
+		return decision, err
+	}
+
+	if err := applyOutcome(b.qualityExpr, b.cfg.Quality, "quality", func(outcome interface{}) error {
+		if outcome == nil {
+			return nil
+		}
+		if m, ok := outcome.(map[string]interface{}); ok {
+			decision = applyValidationMap(decision, m)
+			return nil
+		}
+		if f, ok := toFloat(outcome); ok {
+			decision.quality = floatPtr(f)
+		}
+		return nil
+	}); err != nil {
+		return decision, err
+	}
+
+	return decision, nil
+}
+
+func (b *logicBlock) buildValidationEnv(snapshot map[string]*snapshotValue, value interface{}, evalErr error, expr string, kind string) map[string]interface{} {
+	env := make(map[string]interface{}, len(snapshot)+9)
+	for id, snap := range snapshot {
+		if snap != nil {
+			env[id] = snap.Value
+		}
+	}
+
+	trimmedExpr := strings.TrimSpace(expr)
+	blockLogger := b.dsl.logger.With().
+		Str("block", b.cfg.ID).
+		Logger()
+	ctx := &dslContext{
+		snapshot:       snapshot,
+		logger:         &blockLogger,
+		originKind:     "logic",
+		originID:       b.cfg.ID,
+		expression:     trimmedExpr,
+		expressionKind: kind,
+	}
+	env["cell"] = ctx.value
+	env["value_fn"] = ctx.value
+	env["valid"] = ctx.valid
+	env["dump"] = ctx.dump
+	env["log"] = ctx.log
+	env["value"] = value
+	env["result"] = value
+	env["has_error"] = evalErr != nil
+	env["error"] = buildErrorInfo(evalErr)
+	env["error_raw"] = evalErr
+	if evalErr != nil {
+		env["error_message"] = evalErr.Error()
+		if e, ok := evalErr.(evaluationError); ok {
+			env["error_code"] = e.Code
+		}
+	}
+	if b.dsl != nil {
+		b.dsl.injectHelpers(env)
+	}
+	return env
+}
+
+func normalizeEvaluationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if eval, ok := asEvaluationError(err); ok {
+		return eval
+	}
+	return evaluationError{Code: "logic.runtime_error", Message: err.Error()}
+}
+
+func defaultValidation(evalErr error) validationResult {
+	if evalErr == nil {
+		return validationResult{valid: true, quality: floatPtr(1)}
+	}
+	if eval, ok := evalErr.(evaluationError); ok {
+		return validationResult{valid: false, code: eval.Code, message: eval.Message}
+	}
+	return validationResult{valid: false, code: "logic.error", message: evalErr.Error()}
+}
+
+func buildErrorInfo(err error) map[string]interface{} {
+	if err == nil {
+		return nil
+	}
+	info := map[string]interface{}{"message": err.Error()}
+	if eval, ok := err.(evaluationError); ok {
+		if eval.Code != "" {
+			info["code"] = eval.Code
+		}
+	}
+	return info
+}
+
+func asEvaluationError(err error) (evaluationError, bool) {
+	if err == nil {
+		return evaluationError{}, false
+	}
+	var eval evaluationError
+	if errors.As(err, &eval) {
+		return eval, true
+	}
+	return evaluationError{}, false
+}
+
+func applyValidationOutcome(base validationResult, outcome interface{}) validationResult {
+	if outcome == nil {
+		return base
+	}
+	switch v := outcome.(type) {
+	case bool:
+		base.valid = v
+	case float64:
+		base.quality = floatPtr(v)
+	case float32:
+		base.quality = floatPtr(float64(v))
+	case int, int8, int16, int32, int64:
+		base.quality = floatPtr(float64(toInt64(v)))
+	case uint, uint8, uint16, uint32, uint64:
+		base.quality = floatPtr(float64(toUint64(v)))
+	case string:
+		base.valid = false
+		base.code = v
+		if base.message == "" {
+			base.message = v
+		}
+	case map[string]interface{}:
+		base = applyValidationMap(base, v)
+	default:
+		// no-op for unsupported types
+	}
+	return base
+}
+
+func applyValidationMap(base validationResult, values map[string]interface{}) validationResult {
+	for key, raw := range values {
+		switch strings.ToLower(key) {
+		case "valid":
+			if b, ok := toBool(raw); ok {
+				base.valid = b
+			}
+		case "quality":
+			if f, ok := toFloat(raw); ok {
+				base.quality = floatPtr(f)
+			}
+		case "code":
+			base.code = fmt.Sprint(raw)
+		case "message":
+			base.message = fmt.Sprint(raw)
+		}
+	}
+	return base
+}
+
+func toBool(value interface{}) (bool, bool) {
+	switch v := value.(type) {
+	case bool:
+		return v, true
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "true", "1", "yes", "ok":
+			return true, true
+		case "false", "0", "no":
+			return false, true
+		}
+	}
+	return false, false
+}
+
+func toFloat(value interface{}) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int8:
+		return float64(v), true
+	case int16:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case uint:
+		return float64(v), true
+	case uint8:
+		return float64(v), true
+	case uint16:
+		return float64(v), true
+	case uint32:
+		return float64(v), true
+	case uint64:
+		return float64(v), true
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return 0, false
+		}
+		f, err := strconv.ParseFloat(trimmed, 64)
+		if err == nil {
+			return f, true
+		}
+	}
+	return 0, false
+}
+
+func toInt64(value interface{}) int64 {
+	switch v := value.(type) {
+	case int:
+		return int64(v)
+	case int8:
+		return int64(v)
+	case int16:
+		return int64(v)
+	case int32:
+		return int64(v)
+	case int64:
+		return v
+	default:
+		return 0
+	}
+}
+
+func toUint64(value interface{}) uint64 {
+	switch v := value.(type) {
+	case uint:
+		return uint64(v)
+	case uint8:
+		return uint64(v)
+	case uint16:
+		return uint64(v)
+	case uint32:
+		return uint64(v)
+	case uint64:
+		return v
+	default:
+		return 0
+	}
+}
+
+func floatPtr(v float64) *float64 {
+	value := v
+	return &value
+}
+
+func (r validationResult) diagnosis(ts time.Time) *diagnosis {
+	if r.valid {
+		return nil
+	}
+	if r.code == "" && r.message == "" {
+		return nil
+	}
+	return &diagnosis{Code: r.code, Message: r.message, Timestamp: ts}
+}
+
+func evaluationErrorDiagnosis(err error, ts time.Time) *diagnosis {
+	if err == nil {
+		return nil
+	}
+	if eval, ok := err.(evaluationError); ok {
+		return &diagnosis{Code: eval.Code, Message: eval.Message, Timestamp: ts}
+	}
+	return &diagnosis{Code: "logic.error", Message: err.Error(), Timestamp: ts}
 }
 
 type dslContext struct {
@@ -609,36 +918,13 @@ type dslContext struct {
 
 func (c *dslContext) value(id string) interface{} {
 	snap := c.snapshot[id]
-	if snap == nil || !snap.Valid {
-		panic(fallbackSignal{})
+	if snap == nil {
+		panic(evaluationError{Code: "logic.dependency_missing", Message: fmt.Sprintf("dependency %s missing", id)})
+	}
+	if !snap.Valid {
+		panic(evaluationError{Code: "logic.dependency_invalid", Message: fmt.Sprintf("dependency %s invalid", id)})
 	}
 	return snap.Value
-}
-
-func (c *dslContext) success(v interface{}) interface{} {
-	panic(successSignal{value: v})
-}
-
-func (c *dslContext) fail(args ...interface{}) interface{} {
-	var code, message string
-	if len(args) == 1 {
-		if s, ok := args[0].(string); ok {
-			message = s
-		}
-	}
-	if len(args) >= 2 {
-		if s, ok := args[0].(string); ok {
-			code = s
-		}
-		if s, ok := args[1].(string); ok {
-			message = s
-		}
-	}
-	panic(failSignal{code: code, message: message})
-}
-
-func (c *dslContext) fallback() interface{} {
-	panic(fallbackSignal{})
 }
 
 func (c *dslContext) valid(id string) bool {

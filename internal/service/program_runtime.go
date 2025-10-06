@@ -155,7 +155,7 @@ func (b *programBinding) applyOutputs(outputs []programs.Signal, now time.Time, 
 			errors++
 			continue
 		}
-		if err := binding.cell.setValue(sig.Value, now); err != nil {
+		if err := binding.cell.setValue(sig.Value, now, nil); err != nil {
 			binding.cell.markInvalid(now, "program_output_error", fmt.Sprintf("program %s: %v", b.cfg.ID, err))
 			if snap := snapshot[binding.cell.cfg.ID]; snap != nil {
 				snap.Valid = false

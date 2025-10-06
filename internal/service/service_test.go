@@ -101,16 +101,18 @@ func TestDeterministicCycle(t *testing.T) {
 		},
 		Logic: []config.LogicBlockConfig{
 			{
-				ID:       "deg_c_calc",
-				Target:   "deg_c",
-				Normal:   "success(value(\"raw_temp\") * 0.1)",
-				Fallback: "success(0)",
+				ID:         "deg_c_calc",
+				Target:     "deg_c",
+				Expression: `valid("raw_temp") ? value("raw_temp") * 0.1 : 0`,
+				Valid:      `valid("raw_temp") ? true : {"valid": false, "code": "logic.dependency", "message": "raw temperature unavailable"}`,
+				Quality:    `valid("raw_temp") ? 1 : 0`,
 			},
 			{
-				ID:       "alarm_logic",
-				Target:   "alarm",
-				Normal:   "success(value(\"deg_c\") > 20)",
-				Fallback: "success(false)",
+				ID:         "alarm_logic",
+				Target:     "alarm",
+				Expression: `valid("deg_c") ? value("deg_c") > 20 : false`,
+				Valid:      `valid("deg_c")`,
+				Quality:    `valid("deg_c") ? 1 : 0`,
 			},
 		},
 		Writes: []config.WriteTargetConfig{
@@ -189,9 +191,9 @@ func TestProgramsExecuteBeforeLogic(t *testing.T) {
 		},
 		Logic: []config.LogicBlockConfig{
 			{
-				ID:     "logic",
-				Target: "result",
-				Normal: "success(value(\"processed\") * 2)",
+				ID:         "logic",
+				Target:     "result",
+				Expression: `value("processed") * 2`,
 			},
 		},
 	}
@@ -227,7 +229,7 @@ func TestProgramsExecuteBeforeLogic(t *testing.T) {
 	}
 }
 
-func TestFallbackExecutedOnInvalidDependency(t *testing.T) {
+func TestExpressionHandlesInvalidDependency(t *testing.T) {
 	cfg := &config.Config{
 		Cycle: config.Duration{Duration: time.Millisecond},
 		Cells: []config.CellConfig{
@@ -236,10 +238,11 @@ func TestFallbackExecutedOnInvalidDependency(t *testing.T) {
 		},
 		Logic: []config.LogicBlockConfig{
 			{
-				ID:       "compute",
-				Target:   "output_b",
-				Normal:   "success(value(\"input_a\") * 2)",
-				Fallback: "success(valid(\"input_a\") ? value(\"input_a\") : 42)",
+				ID:         "compute",
+				Target:     "output_b",
+				Expression: `valid("input_a") ? value("input_a") * 2 : 42`,
+				Valid:      "true",
+				Quality:    `valid("input_a") ? 1 : 0.2`,
 			},
 		},
 	}
@@ -281,13 +284,13 @@ func TestCycleDetection(t *testing.T) {
 				ID:           "block_a",
 				Target:       "a",
 				Dependencies: []config.DependencyConfig{{Cell: "b", Type: config.ValueKindNumber}},
-				Normal:       "success(value(\"b\"))",
+				Expression:   "value(\\\"b\\\")",
 			},
 			{
 				ID:           "block_b",
 				Target:       "b",
 				Dependencies: []config.DependencyConfig{{Cell: "a", Type: config.ValueKindNumber}},
-				Normal:       "success(value(\"a\"))",
+				Expression:   "value(\\\"a\\\")",
 			},
 		},
 	}
@@ -383,14 +386,14 @@ func TestModbusServerExposesCells(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get number cell: %v", err)
 	}
-	if err := numberCell.setValue(float64(12.3), time.Now()); err != nil {
+	if err := numberCell.setValue(float64(12.3), time.Now(), nil); err != nil {
 		t.Fatalf("set number value: %v", err)
 	}
 	flagCell, err := svc.cells.mustGet("flag")
 	if err != nil {
 		t.Fatalf("get flag cell: %v", err)
 	}
-	if err := flagCell.setValue(true, time.Now()); err != nil {
+	if err := flagCell.setValue(true, time.Now(), nil); err != nil {
 		t.Fatalf("set flag value: %v", err)
 	}
 
@@ -530,10 +533,9 @@ func TestServiceClosesRemoteClients(t *testing.T) {
 			}},
 		}},
 		Logic: []config.LogicBlockConfig{{
-			ID:       "logic",
-			Target:   "output",
-			Normal:   "success(value(\"input\") > 0)",
-			Fallback: "success(false)",
+			ID:         "logic",
+			Target:     "output",
+			Expression: `valid("input") ? value("input") > 0 : false`,
 		}},
 		Writes: []config.WriteTargetConfig{{
 			ID:       "wt",

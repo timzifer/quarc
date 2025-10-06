@@ -4,19 +4,11 @@ logging:
   format: text
 modules:
   - example-config.d
-dsl:
-  allow_if_blocks: true
 helpers:
   - name: water_viscosity
     arguments: [temperature_c]
     expression: |
-      if temperature_c < 0 {
-        fail("helper.temperature", "below freezing")
-      } else if temperature_c > 100 {
-        fail("helper.temperature", "too hot")
-      } else {
-        success(temperature_c * 0.001)
-      }
+      temperature_c <= 0 ? 0 : temperature_c * 0.001
 cells:
   - id: raw_temperature
     type: number
@@ -56,42 +48,39 @@ writes:
 logic:
   - id: convert_temperature
     target: temperature_c
-    normal: |
-      success(value("raw_temperature"))
-    fallback: |
-      success(0)
+    expression: |
+      value("raw_temperature")
+    valid: |
+      error == nil ? true : {"valid": false, "code": error_code, "message": error_message}
+    quality: |
+      error == nil ? 0.9 : 0.0
   - id: pid_setpoint_schedule
     target: pid_setpoint
-    normal: |
-      success(
-        value("sequencer_active") == "Heat" ? 65 :
-        value("sequencer_active") == "Hold" ? 60 :
-        value("sequencer_active") == "Drain" ? 45 :
-        50
-      )
-    fallback: |
-      success(50)
+    expression: |
+      value("sequencer_active") == "Heat" ? 65 :
+      value("sequencer_active") == "Hold" ? 60 :
+      value("sequencer_active") == "Drain" ? 45 :
+      50
   - id: pid_measurement_feedback
     target: pid_process
-    normal: |
-      success(value("temperature_c"))
-    fallback: |
-      success(valid("temperature_c") ? value("temperature_c") : fail("logic.dependency", "temperature unavailable"))
+    expression: |
+      value("temperature_c")
+    valid: |
+      error == nil ? valid("temperature_c") : {"valid": false, "code": error_code, "message": error_message}
+    quality: |
+      error == nil ? (valid("temperature_c") ? 0.95 : 0.0) : 0.0
   - id: heater_control
     target: heater_command
-    normal: |
-      success(
-        !value("heater_enabled") ? false :
-        value("alarm_state") ? false :
-        value("pid_output") >= 60 ? true :
-        value("pid_output") <= 40 ? false :
-        fallback()
-      )
-    fallback: |
-      success(
-        valid("pid_output") ? value("pid_output") > 50 :
-        fail("logic.dependency", "pid output unavailable")
-      )
+    expression: |
+      !value("heater_enabled") ? false :
+      value("alarm_state") ? false :
+      value("pid_output") >= 60 ? true :
+      value("pid_output") <= 40 ? false :
+      heater_command
+    valid: |
+      error == nil ? valid("pid_output") : {"valid": false, "code": error_code, "message": error_message}
+    quality: |
+      error == nil ? (valid("pid_output") ? 0.95 : 0.0) : 0.0
 server:
   enabled: true
   listen: ":15020"

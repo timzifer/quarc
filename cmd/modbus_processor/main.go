@@ -91,11 +91,13 @@ func executeConfigCheck(cfg *config.Config) int {
 		}
 		fmt.Println()
 
-		printExpression("Normal expression", report.NormalExpression)
-		printExpression("Fallback expression", report.FallbackExpression)
+		printExpression("Expression", report.Expression)
+		printExpression("Valid expression", report.Valid)
+		printExpression("Quality expression", report.Quality)
 
-		printDependencyGroup("Normal dependencies", report.Dependencies, func(dep service.DependencyReport) bool { return dep.InNormal })
-		printDependencyGroup("Fallback dependencies", report.Dependencies, func(dep service.DependencyReport) bool { return dep.InFallback })
+		printDependencyGroup("Expression dependencies", report.Dependencies, func(dep service.DependencyReport) bool { return dep.InExpression })
+		printDependencyGroup("Valid dependencies", report.Dependencies, func(dep service.DependencyReport) bool { return dep.InValid })
+		printDependencyGroup("Quality dependencies", report.Dependencies, func(dep service.DependencyReport) bool { return dep.InQuality })
 
 		if len(report.Errors) > 0 {
 			exitCode = 1
@@ -151,11 +153,28 @@ func printDependencyGroup(title string, deps []service.DependencyReport, filter 
 		if dep.ManuallyConfigured {
 			notes = append(notes, "configured")
 		}
-		if title == "Normal dependencies" && dep.InFallback {
-			notes = append(notes, "also fallback")
-		}
-		if title == "Fallback dependencies" && dep.InNormal {
-			notes = append(notes, "also normal")
+		switch title {
+		case "Expression dependencies":
+			if dep.InValid {
+				notes = append(notes, "also valid")
+			}
+			if dep.InQuality {
+				notes = append(notes, "also quality")
+			}
+		case "Valid dependencies":
+			if dep.InExpression {
+				notes = append(notes, "also expression")
+			}
+			if dep.InQuality {
+				notes = append(notes, "also quality")
+			}
+		case "Quality dependencies":
+			if dep.InExpression {
+				notes = append(notes, "also expression")
+			}
+			if dep.InValid {
+				notes = append(notes, "also valid")
+			}
 		}
 		if !dep.Resolved {
 			notes = append(notes, "unresolved")

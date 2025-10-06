@@ -1,7 +1,6 @@
 package service
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -13,10 +12,9 @@ import (
 )
 
 type dslEngine struct {
-	allowIfBlocks bool
-	helpers       map[string]*helperFunction
-	functions     map[string]func(...interface{}) interface{}
-	logger        zerolog.Logger
+	helpers   map[string]*helperFunction
+	functions map[string]func(...interface{}) interface{}
+	logger    zerolog.Logger
 }
 
 type helperFunction struct {
@@ -31,9 +29,6 @@ func newDSLEngine(cfg config.DSLConfig, helpers []config.HelperFunctionConfig, l
 		helpers:   make(map[string]*helperFunction),
 		functions: make(map[string]func(...interface{}) interface{}),
 		logger:    logger.With().Str("component", "dsl").Logger(),
-	}
-	if cfg.AllowIfBlocks != nil {
-		engine.allowIfBlocks = *cfg.AllowIfBlocks
 	}
 
 	helperCfgs := make([]config.HelperFunctionConfig, 0, len(helpers)+len(cfg.Helpers))
@@ -97,15 +92,7 @@ func (e *dslEngine) buildHelper(cfg config.HelperFunctionConfig) (*helperFunctio
 }
 
 func (e *dslEngine) preprocess(input string) (string, error) {
-	processed := input
-	var err error
-	if e.allowIfBlocks {
-		processed, err = convertIfBlocks(processed)
-		if err != nil {
-			return "", err
-		}
-	}
-	processed = convertStandaloneCalls(processed)
+	processed := convertStandaloneCalls(input)
 	return processed, nil
 }
 
@@ -171,26 +158,20 @@ func (h *helperFunction) invoke(engine *dslEngine, args ...interface{}) (interfa
 		expression:     h.expression,
 		expressionKind: "helper",
 	}
-	env := make(map[string]interface{}, len(args)+len(engine.functions)+4)
+	env := make(map[string]interface{}, len(args)+len(engine.functions)+2)
 	for idx, name := range h.arguments {
 		env[name] = args[idx]
 	}
-	env["success"] = ctx.success
-	env["fail"] = ctx.fail
 	env["log"] = ctx.log
 	env["dump"] = ctx.dump
 	for name, fn := range engine.functions {
 		env[name] = fn
 	}
-	_, err := vm.Run(h.program, env)
+	result, err := vm.Run(h.program, env)
 	if err != nil {
-		var success successSignal
-		if errors.As(err, &success) {
-			return success.value, nil
-		}
 		return nil, err
 	}
-	return nil, fmt.Errorf("helper %s: expression completed without success()", h.name)
+	return result, nil
 }
 
 func isValidIdentifier(name string) bool {
