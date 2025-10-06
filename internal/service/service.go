@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -24,6 +25,7 @@ type Service struct {
 	writes   []*writeTarget
 	server   *modbusServer
 	programs []*programBinding
+	workers  workerSlots
 
 	cycle         time.Duration
 	metrics       metrics
@@ -38,6 +40,35 @@ type metrics struct {
 	LastEvalErrors    int
 	LastWriteErrors   int
 }
+
+type workerSlots struct {
+	read    int
+	program int
+	execute int
+	write   int
+}
+
+func newWorkerSlots(cfg config.WorkerSlots) workerSlots {
+	slots := workerSlots{
+		read:    sanitizeSlot(cfg.Read),
+		program: sanitizeSlot(cfg.Program),
+		execute: sanitizeSlot(cfg.Execute),
+		write:   sanitizeSlot(cfg.Write),
+	}
+	return slots
+}
+
+func sanitizeSlot(value int) int {
+	if value <= 0 {
+		return 1
+	}
+	return value
+}
+
+func (w workerSlots) readSlot() int    { return w.read }
+func (w workerSlots) programSlot() int { return w.program }
+func (w workerSlots) executeSlot() int { return w.execute }
+func (w workerSlots) writeSlot() int   { return w.write }
 
 // New builds a service from configuration and dependencies.
 func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory) (*Service, error) {
@@ -90,6 +121,7 @@ func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory
 		ordered:       ordered,
 		writes:        writes,
 		server:        srv,
+		workers:       newWorkerSlots(cfg.Workers),
 		cycle:         cfg.CycleInterval(),
 	}
 	if len(programs) > 0 {
@@ -153,11 +185,15 @@ func (s *Service) Run(ctx context.Context) error {
 func (s *Service) IterateOnce(ctx context.Context, now time.Time) error {
 	start := time.Now()
 	readErrors := s.readPhase(now)
-	programErrors := s.programPhase(now)
-	snapshot := s.cells.snapshot()
-	evalErrors := s.evalPhase(now, snapshot)
+	readSnapshot := s.cells.snapshot()
+	programErrors := s.programPhase(now, readSnapshot)
+	programSnapshot := s.cells.snapshot()
+	evalErrors := s.evalPhase(now, programSnapshot)
+	executeSnapshot := s.cells.snapshot()
 	writeErrors := s.commitPhase(ctx, now)
-	s.server.refresh(snapshot)
+	if s.server != nil {
+		s.server.refresh(executeSnapshot)
+	}
 
 	s.metrics.CycleCount++
 	s.metrics.LastDuration = time.Since(start)
@@ -170,31 +206,112 @@ func (s *Service) IterateOnce(ctx context.Context, now time.Time) error {
 }
 
 func (s *Service) readPhase(now time.Time) int {
-	errors := 0
+	due := make([]*readGroup, 0, len(s.reads))
 	for _, group := range s.reads {
 		if group.due(now) {
-			errors += group.perform(now, s.clientFactory, s.logger)
+			due = append(due, group)
 		}
 	}
+	if len(due) == 0 {
+		return 0
+	}
+	slots := s.workers.readSlot()
+	errors, _ := runWorkerPool(context.Background(), slots, due, func(_ context.Context, group *readGroup) int {
+		return group.perform(now, s.clientFactory, s.logger)
+	})
 	return errors
 }
 
 func (s *Service) evalPhase(now time.Time, snapshot map[string]*snapshotValue) int {
-	errors := 0
-	for _, block := range s.ordered {
-		errors += block.evaluate(now, snapshot, s.logger)
-	}
-	return errors
+	return s.evaluateLogic(now, snapshot)
 }
 
 func (s *Service) commitPhase(ctx context.Context, now time.Time) int {
-	errors := 0
-	for _, target := range s.writes {
-		if err := ctx.Err(); err != nil {
-			return errors
-		}
-		errors += target.commit(now, s.clientFactory, s.logger)
+	if len(s.writes) == 0 {
+		return 0
 	}
+	slots := s.workers.writeSlot()
+	errors, _ := runWorkerPool(ctx, slots, s.writes, func(c context.Context, target *writeTarget) int {
+		if err := c.Err(); err != nil {
+			return 0
+		}
+		return target.commit(now, s.clientFactory, s.logger)
+	})
+	return errors
+}
+
+func (s *Service) evaluateLogic(now time.Time, snapshot map[string]*snapshotValue) int {
+	count := len(s.ordered)
+	if count == 0 {
+		return 0
+	}
+	slots := s.workers.executeSlot()
+	if slots <= 1 {
+		errors := 0
+		for _, block := range s.ordered {
+			errors += block.evaluate(now, snapshot, nil, s.logger)
+		}
+		return errors
+	}
+
+	type logicResult struct {
+		block  *logicBlock
+		errors int
+	}
+
+	tasks := make(chan *logicBlock)
+	results := make(chan logicResult, slots)
+	var wg sync.WaitGroup
+	var snapshotMu sync.RWMutex
+
+	worker := func() {
+		defer wg.Done()
+		for block := range tasks {
+			errs := block.evaluate(now, snapshot, &snapshotMu, s.logger)
+			results <- logicResult{block: block, errors: errs}
+		}
+	}
+
+	for i := 0; i < slots; i++ {
+		wg.Add(1)
+		go worker()
+	}
+
+	pending := make(map[*logicBlock]int, count)
+	ready := make([]*logicBlock, 0, count)
+	for _, block := range s.ordered {
+		pending[block] = block.internalDependencies
+		if block.internalDependencies == 0 {
+			ready = append(ready, block)
+		}
+	}
+
+	processed := 0
+	active := 0
+	errors := 0
+	for processed < count {
+		for active < slots && len(ready) > 0 {
+			block := ready[0]
+			ready = ready[1:]
+			tasks <- block
+			active++
+		}
+		result := <-results
+		errors += result.errors
+		processed++
+		active--
+		for _, dep := range result.block.dependents {
+			pending[dep]--
+			if pending[dep] == 0 {
+				ready = append(ready, dep)
+			}
+		}
+	}
+
+	close(tasks)
+	wg.Wait()
+	close(results)
+
 	return errors
 }
 
