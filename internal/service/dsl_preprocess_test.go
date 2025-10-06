@@ -50,6 +50,66 @@ func TestConvertStandaloneCallIgnoresHttpUrls(t *testing.T) {
 	}
 }
 
+func TestConvertStandaloneCallLinePreservesFormatting(t *testing.T) {
+	line := "\tlog(\"info\"); // trailing"
+	converted, ok := convertStandaloneCallLine(line, 3)
+	if !ok {
+		t.Fatalf("expected conversion to succeed")
+	}
+	expected := "\tlet __statement3 = log(\"info\"); // trailing"
+	if converted != expected {
+		t.Fatalf("unexpected conversion result: %q", converted)
+	}
+}
+
+func TestConvertStandaloneCallLineRejectsInvalidInputs(t *testing.T) {
+	cases := []string{
+		"log(1)",                     // missing semicolon
+		"value := log(1);",           // assignment should be ignored
+		"// log(1);",                 // comment only
+		"log(1); extra",              // extra tokens
+		"log(1) // no semicolon",     // no semicolon before comment
+		"log(1); /* block comment*/", // block comment not handled
+	}
+	for _, line := range cases {
+		if converted, ok := convertStandaloneCallLine(line, 0); ok {
+			t.Fatalf("expected %q to stay untouched, got %q", line, converted)
+		}
+	}
+}
+
+func TestParseStandaloneCall(t *testing.T) {
+	if name, normalized := parseStandaloneCall("log(\"x\")"); name != "log" || normalized != "log(\"x\")" {
+		t.Fatalf("unexpected parse result: %q %q", name, normalized)
+	}
+
+	negatives := []string{"", "value", "value(", "value)"}
+	for _, input := range negatives {
+		if name, normalized := parseStandaloneCall(input); name != "" || normalized != "" {
+			t.Fatalf("expected empty result for %q", input)
+		}
+	}
+}
+
+func TestSplitCodeAndComment(t *testing.T) {
+	code, comment := splitCodeAndComment("value(\"a//b\") // comment")
+	if code != "value(\"a//b\") " {
+		t.Fatalf("unexpected code part: %q", code)
+	}
+	if comment != "// comment" {
+		t.Fatalf("unexpected comment part: %q", comment)
+	}
+}
+
+func TestLeadingWhitespace(t *testing.T) {
+	if got := leadingWhitespace("    value"); got != "    " {
+		t.Fatalf("unexpected leading whitespace: %q", got)
+	}
+	if got := leadingWhitespace("\t\tvalue"); got != "\t\t" {
+		t.Fatalf("unexpected tab whitespace: %q", got)
+	}
+}
+
 func TestRewriteValidationValueCalls(t *testing.T) {
 	cases := map[string]string{
 		`value("a")`:                      `value_fn("a")`,
@@ -68,6 +128,33 @@ func TestRewriteValidationValueCalls(t *testing.T) {
 		got := rewriteValidationValueCalls(input)
 		if got != want {
 			t.Fatalf("rewriteValidationValueCalls(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestRewriteValueCallsInCodeIgnoresStringsAndProperties(t *testing.T) {
+	input := `value("a") + logger.value("b") + "value(should_stay)"`
+	got := rewriteValueCallsInCode(input)
+	want := `value_fn("a") + logger.value("b") + "value(should_stay)"`
+	if got != want {
+		t.Fatalf("rewriteValueCallsInCode = %q, want %q", got, want)
+	}
+}
+
+func TestShouldRewriteValueCall(t *testing.T) {
+	cases := map[string]bool{
+		"value(":        true,
+		" value (":      true,
+		"logger.value(": false,
+		"value_extra(":  false,
+	}
+	for input, want := range cases {
+		idx := strings.Index(input, "value")
+		if idx < 0 {
+			t.Fatalf("test case %q missing 'value'", input)
+		}
+		if got := shouldRewriteValueCall(input, idx); got != want {
+			t.Fatalf("shouldRewriteValueCall(%q) = %v, want %v", input, got, want)
 		}
 	}
 }

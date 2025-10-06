@@ -1,6 +1,8 @@
 package service
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -204,6 +206,105 @@ func TestHelperFunctionUsage(t *testing.T) {
 	}
 	if decision.valid {
 		t.Fatalf("expected invalid decision when expression errored")
+	}
+}
+
+func TestParseDSLLogLevel(t *testing.T) {
+	cases := []struct {
+		name      string
+		input     interface{}
+		wantLevel zerolog.Level
+		ok        bool
+	}{
+		{"trace", "trace", zerolog.TraceLevel, true},
+		{"debug", "DEBUG", zerolog.DebugLevel, true},
+		{"info", "info", zerolog.InfoLevel, true},
+		{"warn", "Warn", zerolog.WarnLevel, true},
+		{"warning", "warning", zerolog.WarnLevel, true},
+		{"error", "error", zerolog.ErrorLevel, true},
+		{"err", "err", zerolog.ErrorLevel, true},
+		{"unknown", "unknown", zerolog.InfoLevel, false},
+		{"non-string", 123, zerolog.InfoLevel, false},
+		{"slice", []string{"debug"}, zerolog.InfoLevel, false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			level, ok := parseDSLLogLevel(tc.input)
+			if level != tc.wantLevel || ok != tc.ok {
+				t.Fatalf("parseDSLLogLevel(%v) = (%v, %v), want (%v, %v)", tc.input, level, ok, tc.wantLevel, tc.ok)
+			}
+		})
+	}
+}
+
+func TestDSLContextLogLevels(t *testing.T) {
+	var buf bytes.Buffer
+	logger := zerolog.New(&buf).Level(zerolog.TraceLevel)
+	ctx := &dslContext{
+		logger:         &logger,
+		originKind:     "block",
+		originID:       "heater",
+		expressionKind: "expression",
+		expression:     "value(\"input\")",
+	}
+
+	ctx.log("debug", "heating", 42)
+	ctx.log("WARN", "overheat")
+	ctx.log("custom message", true)
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 log entries, got %d", len(lines))
+	}
+
+	decode := func(t *testing.T, line string) map[string]interface{} {
+		t.Helper()
+		entry := make(map[string]interface{})
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("decode log entry: %v", err)
+		}
+		return entry
+	}
+
+	first := decode(t, lines[0])
+	if got := first["level"]; got != "debug" {
+		t.Fatalf("expected debug level, got %v", got)
+	}
+	if got := first["message"]; got != "heating" {
+		t.Fatalf("unexpected first message: %v", got)
+	}
+	if got := first["value"]; got != float64(42) { // JSON numbers decode as float64
+		t.Fatalf("unexpected logged value: %v", got)
+	}
+
+	second := decode(t, lines[1])
+	if got := second["level"]; got != "warn" {
+		t.Fatalf("expected warn level, got %v", got)
+	}
+	if got := second["message"]; got != "overheat" {
+		t.Fatalf("unexpected second message: %v", got)
+	}
+
+	third := decode(t, lines[2])
+	if got := third["level"]; got != "info" {
+		t.Fatalf("expected info level fallback, got %v", got)
+	}
+	if got := third["message"]; got != "custom message" {
+		t.Fatalf("unexpected third message: %v", got)
+	}
+	if value, ok := third["value"]; !ok || value.(bool) != true {
+		t.Fatalf("expected bool value in third entry, got %v", value)
+	}
+
+	for idx, entry := range []map[string]interface{}{first, second, third} {
+		if entry["origin_kind"] != "block" {
+			t.Fatalf("entry %d missing origin_kind decoration: %v", idx, entry)
+		}
+		if entry["origin_id"] != "heater" {
+			t.Fatalf("entry %d missing origin_id decoration: %v", idx, entry)
+		}
 	}
 }
 

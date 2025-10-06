@@ -1204,7 +1204,14 @@ func (c *dslContext) log(args ...interface{}) interface{} {
 	if c.logger == nil {
 		return nil
 	}
-	event := c.logger.Info()
+	level := zerolog.InfoLevel
+	if len(args) > 0 {
+		if lvl, ok := parseDSLLogLevel(args[0]); ok {
+			level = lvl
+			args = args[1:]
+		}
+	}
+	event := c.eventForLevel(level)
 	event = c.decorateEvent(event)
 	message := "dsl log"
 	if len(args) > 0 {
@@ -1222,6 +1229,47 @@ func (c *dslContext) log(args ...interface{}) interface{} {
 	}
 	event.Msg(message)
 	return nil
+}
+
+func (c *dslContext) eventForLevel(level zerolog.Level) *zerolog.Event {
+	if c.logger == nil {
+		return nil
+	}
+	switch level {
+	case zerolog.TraceLevel:
+		return c.logger.Trace()
+	case zerolog.DebugLevel:
+		return c.logger.Debug()
+	case zerolog.InfoLevel:
+		return c.logger.Info()
+	case zerolog.WarnLevel:
+		return c.logger.Warn()
+	case zerolog.ErrorLevel:
+		return c.logger.Error()
+	default:
+		return c.logger.Info()
+	}
+}
+
+func parseDSLLogLevel(arg interface{}) (zerolog.Level, bool) {
+	str, ok := arg.(string)
+	if !ok {
+		return zerolog.InfoLevel, false
+	}
+	switch strings.ToLower(strings.TrimSpace(str)) {
+	case "trace":
+		return zerolog.TraceLevel, true
+	case "debug":
+		return zerolog.DebugLevel, true
+	case "info":
+		return zerolog.InfoLevel, true
+	case "warn", "warning":
+		return zerolog.WarnLevel, true
+	case "error", "err":
+		return zerolog.ErrorLevel, true
+	default:
+		return zerolog.InfoLevel, false
+	}
 }
 
 func (c *dslContext) decorateEvent(event *zerolog.Event) *zerolog.Event {
