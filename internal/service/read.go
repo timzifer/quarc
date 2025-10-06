@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -18,10 +19,11 @@ type readSignal struct {
 }
 
 type readGroup struct {
-	cfg     config.ReadGroupConfig
-	signals []readSignal
-	next    time.Time
-	client  remote.Client
+	cfg      config.ReadGroupConfig
+	signals  []readSignal
+	next     time.Time
+	client   remote.Client
+	disabled atomic.Bool
 }
 
 func newReadGroups(cfgs []config.ReadGroupConfig, cells *cellStore) ([]*readGroup, error) {
@@ -50,12 +52,18 @@ func newReadGroups(cfgs []config.ReadGroupConfig, cells *cellStore) ([]*readGrou
 			}
 			group.signals = append(group.signals, readSignal{cfg: sigCfg, cell: cell})
 		}
+		if cfg.Disable {
+			group.disabled.Store(true)
+		}
 		groups = append(groups, group)
 	}
 	return groups, nil
 }
 
 func (g *readGroup) due(now time.Time) bool {
+	if g.Disabled() {
+		return false
+	}
 	ttl := g.cfg.TTL.Duration
 	if ttl <= 0 {
 		return true
@@ -67,6 +75,9 @@ func (g *readGroup) due(now time.Time) bool {
 }
 
 func (g *readGroup) perform(now time.Time, factory remote.ClientFactory, logger zerolog.Logger) int {
+	if g.Disabled() {
+		return 0
+	}
 	errors := 0
 	ttl := g.cfg.TTL.Duration
 	if ttl <= 0 {
@@ -152,6 +163,35 @@ func (g *readGroup) closeClient() {
 	}
 	_ = g.client.Close()
 	g.client = nil
+}
+
+func (g *readGroup) Disabled() bool {
+	return g.disabled.Load()
+}
+
+func (g *readGroup) SetDisabled(disable bool) {
+	g.disabled.Store(disable)
+	if disable {
+		g.closeClient()
+	}
+}
+
+func (g *readGroup) state() readGroupState {
+	return readGroupState{
+		ID:       g.cfg.ID,
+		Function: g.cfg.Function,
+		Start:    g.cfg.Start,
+		Length:   g.cfg.Length,
+		Disabled: g.Disabled(),
+	}
+}
+
+type readGroupState struct {
+	ID       string `json:"id"`
+	Function string `json:"function"`
+	Start    uint16 `json:"start"`
+	Length   uint16 `json:"length"`
+	Disabled bool   `json:"disabled"`
 }
 
 func (s *readSignal) apply(raw []byte, function string, ts time.Time) error {

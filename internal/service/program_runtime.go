@@ -179,12 +179,28 @@ func (s *Service) delta(now time.Time) time.Duration {
 	return delta
 }
 
-func (s *Service) programPhase(now time.Time, snapshot map[string]*snapshotValue) int {
+func (s *Service) programPhase(now time.Time, snapshot map[string]*snapshotValue, load *loadSnapshot) int {
 	if len(s.programs) == 0 {
+		if load != nil {
+			load.Programs.Total = 0
+			load.Programs.Pending = 0
+			load.Programs.Active = 0
+		}
 		return 0
 	}
 	ctx := programs.Context{Now: now, Delta: s.delta(now)}
 	slots := s.workers.programSlot()
+	if load != nil {
+		load.Programs.Total = len(s.programs)
+		load.Programs.Pending = len(s.programs)
+		if slots > 0 {
+			if len(s.programs) < slots {
+				load.Programs.Active = len(s.programs)
+			} else {
+				load.Programs.Active = slots
+			}
+		}
+	}
 	errors, _ := runWorkerPool(context.Background(), slots, s.programs, func(_ context.Context, binding *programBinding) int {
 		inputs := binding.prepareInputs(snapshot)
 		outputs, err := binding.program.Execute(ctx, inputs)
