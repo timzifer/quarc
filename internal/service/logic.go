@@ -3,7 +3,6 @@ package service
 import (
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,9 +17,8 @@ import (
 )
 
 type logicDependency struct {
-	cell      *cell
-	kind      config.ValueKind
-	threshold *float64
+	cell *cell
+	kind config.ValueKind
 }
 
 type logicBlock struct {
@@ -37,47 +35,6 @@ type logicBlock struct {
 	qualityDependencyIDs    []string
 	dependents              []*logicBlock
 	internalDependencies    int
-	metrics                 logicBlockMetrics
-}
-
-type logicBlockMetrics struct {
-	mu         sync.RWMutex
-	callCount  uint64
-	skipCount  uint64
-	totalTime  time.Duration
-	lastInputs map[string]dependencySnapshot
-}
-
-type dependencySnapshot struct {
-	valid bool
-	value interface{}
-}
-
-type logicBlockMetricsSnapshot struct {
-	Calls       uint64
-	Skips       uint64
-	AvgDuration time.Duration
-}
-
-type logicEvaluationResult struct {
-	errors   int
-	executed bool
-	skipped  bool
-	duration time.Duration
-}
-
-type logicCycleStats struct {
-	Evaluated     int
-	Skipped       int
-	TotalDuration time.Duration
-}
-
-type logicBlockState struct {
-	ID          string  `json:"id"`
-	Target      string  `json:"target"`
-	Calls       uint64  `json:"calls"`
-	Skips       uint64  `json:"skips"`
-	AvgDuration float64 `json:"avg_duration_ms"`
 }
 
 type validationResult struct {
@@ -156,140 +113,12 @@ func newLogicBlocks(cfgs []config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 	return blocks, ordered, nil
 }
 
-func (b *logicBlock) shouldSkip(snapshot map[string]*snapshotValue) bool {
-	if snapshot == nil {
-		return false
-	}
-	b.metrics.mu.RLock()
-	defer b.metrics.mu.RUnlock()
-	if b.metrics.lastInputs == nil {
-		return false
-	}
-	for _, dep := range b.deps {
-		snap := snapshot[dep.cell.cfg.ID]
-		if snap == nil {
-			return false
-		}
-		previous, ok := b.metrics.lastInputs[dep.cell.cfg.ID]
-		if !ok {
-			return false
-		}
-		if snap.Valid != previous.valid {
-			return false
-		}
-		if !snap.Valid {
-			continue
-		}
-		switch dep.kind {
-		case config.ValueKindBool, config.ValueKindString:
-			if snap.Value != previous.value {
-				return false
-			}
-		case config.ValueKindNumber:
-			current, okCurr := toFloat(snap.Value)
-			prevValue, okPrev := toFloat(previous.value)
-			if !okCurr || !okPrev {
-				if snap.Value != previous.value {
-					return false
-				}
-				continue
-			}
-			threshold := 0.0
-			if dep.threshold != nil {
-				threshold = *dep.threshold
-				if threshold < 0 {
-					threshold = 0
-				}
-			}
-			if math.Abs(current-prevValue) > threshold {
-				return false
-			}
-		default:
-			if snap.Value != previous.value {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func (b *logicBlock) recordSkip(snapshot map[string]*snapshotValue) {
-	b.metrics.mu.Lock()
-	defer b.metrics.mu.Unlock()
-	b.metrics.skipCount++
-	if b.metrics.lastInputs == nil {
-		b.metrics.lastInputs = b.captureInputs(snapshot)
-	}
-}
-
-func (b *logicBlock) recordEvaluation(duration time.Duration, snapshot map[string]*snapshotValue, ready bool) {
-	b.metrics.mu.Lock()
-	defer b.metrics.mu.Unlock()
-	b.metrics.callCount++
-	b.metrics.totalTime += duration
-	if ready {
-		b.metrics.lastInputs = b.captureInputs(snapshot)
-	} else {
-		b.metrics.lastInputs = nil
-	}
-}
-
-func (b *logicBlock) captureInputs(snapshot map[string]*snapshotValue) map[string]dependencySnapshot {
-	if snapshot == nil {
-		return nil
-	}
-	inputs := make(map[string]dependencySnapshot, len(b.deps))
-	for _, dep := range b.deps {
-		snap := snapshot[dep.cell.cfg.ID]
-		if snap == nil {
-			continue
-		}
-		inputs[dep.cell.cfg.ID] = dependencySnapshot{
-			valid: snap.Valid,
-			value: cloneValue(snap.Value),
-		}
-	}
-	if len(inputs) == 0 {
-		return nil
-	}
-	return inputs
-}
-
-func (b *logicBlock) metricsSnapshot() logicBlockMetricsSnapshot {
-	b.metrics.mu.RLock()
-	defer b.metrics.mu.RUnlock()
-	avg := time.Duration(0)
-	if b.metrics.callCount > 0 {
-		avg = time.Duration(int64(b.metrics.totalTime) / int64(b.metrics.callCount))
-	}
-	return logicBlockMetricsSnapshot{
-		Calls:       b.metrics.callCount,
-		Skips:       b.metrics.skipCount,
-		AvgDuration: avg,
-	}
-}
-
-func (b *logicBlock) state() logicBlockState {
-	metrics := b.metricsSnapshot()
-	info := logicBlockState{
-		ID:     b.cfg.ID,
-		Target: b.cfg.Target,
-		Calls:  metrics.Calls,
-		Skips:  metrics.Skips,
-	}
-	if metrics.Calls > 0 {
-		info.AvgDuration = float64(metrics.AvgDuration) / float64(time.Millisecond)
-	}
-	return info
-}
-
 type dependencyMeta struct {
 	expression bool
 	valid      bool
 	quality    bool
 	configured bool
 	cell       *cell
-	threshold  *float64
 }
 
 func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEngine, order int) (*logicBlock, map[string]*dependencyMeta, error) {
@@ -337,9 +166,6 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 			return block, meta, fmt.Errorf("logic block %s dependency %s expects %s but cell is %s", cfg.ID, depCfg.Cell, depCfg.Type, depCell.cfg.Type)
 		}
 		entry.cell = depCell
-		if depCfg.Threshold != nil {
-			entry.threshold = depCfg.Threshold
-		}
 		expressionIDs[depCfg.Cell] = struct{}{}
 	}
 
@@ -426,7 +252,7 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 		if entry == nil || entry.cell == nil {
 			continue
 		}
-		deps = append(deps, logicDependency{cell: entry.cell, kind: entry.cell.cfg.Type, threshold: entry.threshold})
+		deps = append(deps, logicDependency{cell: entry.cell, kind: entry.cell.cfg.Type})
 	}
 	block.deps = deps
 
@@ -673,10 +499,10 @@ func topoSort(blocks []*logicBlock, producers map[string]*logicBlock) ([]*logicB
 	return ordered, nil
 }
 
-func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue, mu *sync.RWMutex, logger zerolog.Logger) logicEvaluationResult {
-	result := logicEvaluationResult{}
+func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue, mu *sync.RWMutex, logger zerolog.Logger) int {
+	errors := 0
 	if b.target == nil {
-		return result
+		return 0
 	}
 
 	blockLogger := logger.With().Str("block", b.cfg.ID).Logger()
@@ -684,22 +510,6 @@ func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue,
 
 	view := cloneSnapshotValues(snapshot, mu)
 	ready := b.dependenciesReady(view)
-	if ready && b.shouldSkip(view) {
-		blockLogger.Trace().Bool("skipped", true).Msg("logic block unchanged")
-		b.recordSkip(view)
-		result.skipped = true
-		return result
-	}
-
-	result.executed = true
-	start := time.Now()
-	errors := 0
-	defer func() {
-		result.errors = errors
-		result.duration = time.Since(start)
-		b.recordEvaluation(result.duration, view, ready)
-	}()
-
 	var (
 		value   interface{}
 		evalErr error
@@ -723,7 +533,7 @@ func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue,
 		b.target.markInvalid(now, "logic.validate_error", valErr.Error())
 		updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
 		errors++
-		return result
+		return errors
 	}
 
 	if evalErr != nil && decision.valid {
@@ -737,11 +547,11 @@ func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue,
 			b.target.markInvalid(now, "logic.assign", err.Error())
 			updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
 			errors++
-			return result
+			return errors
 		}
 		updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
 		blockLogger.Trace().Bool("success", true).Msg("logic block evaluation completed")
-		return result
+		return errors
 	}
 
 	diag := decision.diagnosis(now)
@@ -756,7 +566,7 @@ func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue,
 	updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
 	blockLogger.Trace().Bool("success", false).Msg("logic block evaluation completed")
 	errors++
-	return result
+	return errors
 }
 
 func (b *logicBlock) dependenciesReady(snapshot map[string]*snapshotValue) bool {
