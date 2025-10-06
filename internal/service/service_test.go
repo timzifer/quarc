@@ -11,7 +11,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"modbus_processor/internal/config"
-	"modbus_processor/internal/remote"
+	"modbus_processor/remote"
 )
 
 type fakeClient struct {
@@ -484,9 +484,9 @@ func TestServiceManualCellOperations(t *testing.T) {
 	if !state.Valid {
 		t.Fatalf("expected cell to be valid")
 	}
-        if state.UpdatedAt == nil || state.UpdatedAt.IsZero() {
-                t.Fatalf("expected updated timestamp to be set")
-        }
+	if state.UpdatedAt == nil || state.UpdatedAt.IsZero() {
+		t.Fatalf("expected updated timestamp to be set")
+	}
 	if got, ok := state.Value.(float64); !ok || got != 42 {
 		t.Fatalf("expected value 42, got %v", state.Value)
 	}

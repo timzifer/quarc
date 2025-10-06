@@ -17,7 +17,7 @@ import (
 	"modbus_processor/internal/logging"
 	"modbus_processor/internal/reload"
 	"modbus_processor/internal/service"
-	"modbus_processor/internal/telemetry"
+	"modbus_processor/telemetry"
 )
 
 func main() {

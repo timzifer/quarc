@@ -12,8 +12,8 @@ import (
 	"github.com/shopspring/decimal"
 
 	"modbus_processor/internal/config"
-	"modbus_processor/internal/remote"
-	serviceio "modbus_processor/internal/service/io"
+	"modbus_processor/remote"
+	serviceio "modbus_processor/serviceio"
 )
 
 type writeTarget struct {

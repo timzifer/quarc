@@ -1,4 +1,4 @@
-package io
+package serviceio
 
 import (
 	"time"
