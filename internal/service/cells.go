@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"modbus_processor/internal/config"
+	serviceio "modbus_processor/internal/service/io"
 )
 
 type diagnosis struct {
@@ -103,6 +104,10 @@ func (s *cellStore) mustGet(id string) (*cell, error) {
 	return c, nil
 }
 
+func (s *cellStore) Get(id string) (serviceio.Cell, error) {
+	return s.mustGet(id)
+}
+
 func (s *cellStore) snapshot() map[string]*snapshotValue {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -136,6 +141,22 @@ func (c *cell) markInvalid(ts time.Time, code, message string) {
 	c.diag = &diagnosis{Code: code, Message: message, Timestamp: ts}
 	c.update = ts
 	c.mu.Unlock()
+}
+
+func (c *cell) Config() config.CellConfig {
+	return c.cfg
+}
+
+func (c *cell) SetValue(value interface{}, ts time.Time, quality *float64) error {
+	return c.setValue(value, ts, quality)
+}
+
+func (c *cell) MarkInvalid(ts time.Time, code, message string) {
+	c.markInvalid(ts, code, message)
+}
+
+func (c *cell) CurrentValue() (interface{}, bool) {
+	return c.currentValue()
 }
 
 func (c *cell) applyManualUpdate(ts time.Time, update manualCellUpdate) error {
