@@ -22,11 +22,21 @@ type Context struct {
 	Delta time.Duration
 }
 
+// Program defines the contract implemented by runtime control modules.
+//
+// Programs receive the current execution context and a snapshot of input
+// signals, and can emit zero or more output signals. Implementations should be
+// deterministic, avoid long blocking operations, and be safe for repeated calls
+// with varying input.
 type Program interface {
 	ID() string
 	Execute(ctx Context, incoming []Signal) ([]Signal, error)
 }
 
+// Factory creates program instances from configuration data.
+//
+// Factories are registered under a stable identifier so the service can create
+// the required program for each module during startup or configuration reloads.
 type Factory func(instanceID string, settings map[string]interface{}) (Program, error)
 
 var (

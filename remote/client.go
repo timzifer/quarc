@@ -10,6 +10,10 @@ import (
 )
 
 // Client defines the subset of Modbus operations required by the service.
+//
+// Implementations can wrap TCP, RTU or mocked transports, but must honour the
+// Modbus semantics of each method and be safe for concurrent access by the
+// scheduler which may trigger multiple reads and writes in quick succession.
 type Client interface {
 	ReadCoils(address, quantity uint16) ([]byte, error)
 	ReadDiscreteInputs(address, quantity uint16) ([]byte, error)
@@ -21,6 +25,10 @@ type Client interface {
 }
 
 // ClientFactory is responsible for creating Modbus clients for remote calls.
+//
+// Factories should establish the underlying connection and return a client that
+// is ready for immediate use. They are invoked during configuration loading, so
+// expensive retries should be avoided or time bound to keep startup responsive.
 type ClientFactory func(cfg config.EndpointConfig) (Client, error)
 
 type tcpClient struct {
