@@ -70,3 +70,35 @@ func TestConvertValueExtendedTypes(t *testing.T) {
 		t.Fatalf("expected %v, got %v", expected, dateVal)
 	}
 }
+
+func TestCellStoreSnapshotReuse(t *testing.T) {
+	store, err := newCellStore([]config.CellConfig{{ID: "value", Type: config.ValueKindInteger}})
+	if err != nil {
+		t.Fatalf("newCellStore: %v", err)
+	}
+	cell, err := store.mustGet("value")
+	if err != nil {
+		t.Fatalf("mustGet: %v", err)
+	}
+	if err := cell.setValue(1, time.Now(), nil); err != nil {
+		t.Fatalf("setValue: %v", err)
+	}
+
+	initial := store.snapshot()
+	ptr := initial["value"]
+	if ptr == nil {
+		t.Fatalf("expected snapshot entry")
+	}
+
+	if err := cell.setValue(2, time.Now(), nil); err != nil {
+		t.Fatalf("setValue: %v", err)
+	}
+
+	reused := store.snapshotInto(initial)
+	if reused["value"] != ptr {
+		t.Fatalf("expected snapshot value pointer to be reused")
+	}
+	if got, ok := reused["value"].Value.(int64); !ok || got != 2 {
+		t.Fatalf("expected updated value 2, got %v", reused["value"].Value)
+	}
+}
