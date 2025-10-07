@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"modbus_processor/internal/config"
+	"modbus_processor/internal/service/canstream"
 	"modbus_processor/internal/service/modbus"
 	"modbus_processor/remote"
 	serviceio "modbus_processor/serviceio"
@@ -146,7 +147,10 @@ func (s systemLoad) snapshot() systemLoadSnapshot {
 	}
 }
 
-const defaultDriver = "modbus"
+const (
+	defaultDriver = "modbus"
+	canDriver     = "can"
+)
 
 type Option func(*factoryRegistry)
 
@@ -162,6 +166,7 @@ func newFactoryRegistry(factory remote.ClientFactory) factoryRegistry {
 	return factoryRegistry{
 		readers: map[string]serviceio.ReaderFactory{
 			defaultDriver: modbus.NewReaderFactory(factory),
+			canDriver:     canstream.NewReaderFactory(),
 		},
 		writers: map[string]serviceio.WriterFactory{
 			defaultDriver: modbus.NewWriterFactory(factory),

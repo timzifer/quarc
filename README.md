@@ -46,7 +46,7 @@ Configuration is provided as YAML (see [`config.example.yaml`](config.example.ya
 * `modules` – Optional list of additional YAML snippets to load (relative to the parent file). The loader also accepts directories, processing all `*.yaml`/`*.yml` files in lexical order, which makes `config.d`-style setups trivial.
 * `programs` – Reusable control modules with typed input/output bindings that execute between the read and logic phases.
 * `cells` – Definitions of all local memory cells.
-* `reads` – Modbus block reads (slave endpoint, function, address range, TTL and signal mapping into cells).
+* `reads` – Modbus block reads (slave endpoint, function, address range, TTL and signal mapping into cells). A dedicated `can` driver ingests UDP/TCP byte streams from CAN↔Ethernet controllers and decodes frames according to an external DBC file.
 * `logic` – Logic blocks with an expression AST, optional `valid`/`quality` expressions and a target cell. Dependencies are automatically discovered from all expressions.
 * `writes` – Modbus write targets with deadband, rate limit and priority options.
 * `logging` / `policies` – Runtime logging setup and optional global policies (retry behaviour, watchdog, readback, etc.). `logging.format` controls the stdout renderer (`json` by default, `text` for human friendly console output).
@@ -71,6 +71,40 @@ logic:
 ```
 
 See the full [`config.example.yaml`](config.example.yaml) for a complete configuration including reads, programs and writes. The configuration loads every module in [`example-config.d`](example-config.d) to showcase each built-in program with runnable input/output bindings.
+
+#### Read configuration examples
+
+```yaml
+reads:
+  - id: temperature_sensor
+    endpoint:
+      address: "192.168.10.10:502"
+      unit_id: 1
+    function: holding
+    start: 0
+    length: 1
+    ttl: 1s
+    signals:
+      - cell: raw_temperature
+        offset: 0
+        type: number
+        scale: 0.1
+  - id: drivetrain_can
+    endpoint:
+      address: "192.168.10.50:20108"
+      driver: can
+    ttl: 0s
+    can:
+      protocol: udp
+      dbc: configs/drivetrain.dbc
+      frames:
+        - message: MotorStatus
+          signals:
+            - name: SpeedKph
+              cell: motor_speed
+            - name: WheelError
+              cell: motor_alarm
+```
 
 ### Reusable programs
 
