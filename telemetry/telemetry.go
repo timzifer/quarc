@@ -7,6 +7,10 @@ import (
 )
 
 // Collector captures telemetry events emitted by the runtime.
+//
+// Implementations may forward metrics to Prometheus, loggers or other
+// monitoring systems. They should be inexpensive to call because hooks are
+// executed inline with critical paths such as configuration reloads.
 type Collector interface {
 	IncHotReload(file string)
 }
