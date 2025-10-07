@@ -112,13 +112,29 @@ func (s *cellStore) Get(id string) (serviceio.Cell, error) {
 }
 
 func (s *cellStore) snapshot() map[string]*snapshotValue {
+	return s.snapshotInto(nil)
+}
+
+func (s *cellStore) snapshotInto(buf map[string]*snapshotValue) map[string]*snapshotValue {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	snap := make(map[string]*snapshotValue, len(s.cells))
-	for id, c := range s.cells {
-		snap[id] = c.asSnapshotValue()
+
+	if buf == nil {
+		buf = make(map[string]*snapshotValue, len(s.cells))
 	}
-	return snap
+
+	if len(buf) > len(s.cells) {
+		for id := range buf {
+			if _, exists := s.cells[id]; !exists {
+				delete(buf, id)
+			}
+		}
+	}
+
+	for id, c := range s.cells {
+		buf[id] = c.writeSnapshot(buf[id])
+	}
+	return buf
 }
 
 func (c *cell) setValue(value interface{}, ts time.Time, quality *float64) error {
@@ -200,9 +216,21 @@ func (c *cell) applyManualUpdate(ts time.Time, update manualCellUpdate) error {
 }
 
 func (c *cell) asSnapshotValue() *snapshotValue {
+	return c.writeSnapshot(nil)
+}
+
+func (c *cell) writeSnapshot(dst *snapshotValue) *snapshotValue {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return &snapshotValue{Value: cloneValue(c.value), Valid: c.valid, Kind: c.cfg.Type, Quality: cloneQuality(c.quality)}
+
+	if dst == nil {
+		dst = &snapshotValue{}
+	}
+	dst.Value = cloneValue(c.value)
+	dst.Valid = c.valid
+	dst.Kind = c.cfg.Type
+	dst.Quality = cloneQuality(c.quality)
+	return dst
 }
 
 func convertValue(kind config.ValueKind, value interface{}) (interface{}, error) {

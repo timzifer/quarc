@@ -23,14 +23,15 @@ type Service struct {
 	cfg    *config.Config
 	logger zerolog.Logger
 
-	cells    *cellStore
-	reads    []serviceio.ReadGroup
-	logic    []*logicBlock
-	ordered  []*logicBlock
-	writes   []serviceio.Writer
-	server   *modbusServer
-	programs []*programBinding
-	workers  workerSlots
+	cells     *cellStore
+	snapshots *snapshotSwitch
+	reads     []serviceio.ReadGroup
+	logic     []*logicBlock
+	ordered   []*logicBlock
+	writes    []serviceio.Writer
+	server    *modbusServer
+	programs  []*programBinding
+	workers   workerSlots
 
 	metrics       metrics
 	lastCycleTime time.Time
@@ -258,15 +259,16 @@ func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory
 
 	slots := newWorkerSlots(cfg.Workers)
 	svc := &Service{
-		cfg:     cfg,
-		logger:  logger,
-		cells:   cells,
-		reads:   reads,
-		logic:   logic,
-		ordered: ordered,
-		writes:  writes,
-		server:  srv,
-		workers: slots,
+		cfg:       cfg,
+		logger:    logger,
+		cells:     cells,
+		snapshots: newSnapshotSwitch(len(cfg.Cells)),
+		reads:     reads,
+		logic:     logic,
+		ordered:   ordered,
+		writes:    writes,
+		server:    srv,
+		workers:   slots,
 	}
 	svc.load = newSystemLoad(slots)
 	svc.controller = newCycleController(cfg.CycleInterval())
@@ -379,11 +381,26 @@ func (s *Service) Run(ctx context.Context) error {
 func (s *Service) IterateOnce(ctx context.Context, now time.Time) error {
 	start := time.Now()
 	readErrors := s.readPhase(now)
-	readSnapshot := s.cells.snapshot()
+	var readSnapshot map[string]*snapshotValue
+	if s.snapshots != nil {
+		readSnapshot = s.snapshots.Capture(s.cells)
+	} else {
+		readSnapshot = s.cells.snapshot()
+	}
 	programErrors := s.programPhase(now, readSnapshot)
-	programSnapshot := s.cells.snapshot()
+	var programSnapshot map[string]*snapshotValue
+	if s.snapshots != nil {
+		programSnapshot = s.snapshots.Capture(s.cells)
+	} else {
+		programSnapshot = s.cells.snapshot()
+	}
 	evalErrors := s.evalPhase(now, programSnapshot)
-	executeSnapshot := s.cells.snapshot()
+	var executeSnapshot map[string]*snapshotValue
+	if s.snapshots != nil {
+		executeSnapshot = s.snapshots.Capture(s.cells)
+	} else {
+		executeSnapshot = s.cells.snapshot()
+	}
 	writeErrors := s.commitPhase(ctx, now)
 	if s.server != nil {
 		s.server.refresh(executeSnapshot)
