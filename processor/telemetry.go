@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"modbus_processor/internal/config"
-	"modbus_processor/telemetry"
+	"github.com/timzifer/modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/telemetry"
 )
 
 func newTelemetryCollector(cfg config.TelemetryConfig) (telemetry.Collector, error) {

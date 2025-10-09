@@ -1,6 +1,6 @@
 package programs
 
-import "modbus_processor/internal/config"
+import "github.com/timzifer/modbus_processor/internal/config"
 
 type runtimeProgram struct {
 	id    string

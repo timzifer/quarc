@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/internal/config"
 )
 
 type fileState struct {

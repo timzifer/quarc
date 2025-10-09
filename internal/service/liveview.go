@@ -12,7 +12,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/internal/config"
 )
 
 type liveViewServer struct {

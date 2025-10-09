@@ -1,4 +1,4 @@
-module modbus_processor
+module github.com/timzifer/modbus_processor
 
 go 1.24.3
 

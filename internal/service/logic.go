@@ -15,7 +15,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/shopspring/decimal"
 
-	"modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/internal/config"
 )
 
 type logicDependency struct {

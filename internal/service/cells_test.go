@@ -6,7 +6,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
-	"modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/internal/config"
 )
 
 func TestNewCellStoreConstantValue(t *testing.T) {

@@ -16,8 +16,8 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"modbus_processor/internal/config"
-	serviceio "modbus_processor/serviceio"
+	"github.com/timzifer/modbus_processor/internal/config"
+	serviceio "github.com/timzifer/modbus_processor/serviceio"
 
 	"go.einride.tech/can/pkg/dbc"
 )

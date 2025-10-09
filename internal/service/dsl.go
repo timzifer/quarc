@@ -8,7 +8,7 @@ import (
 	"github.com/expr-lang/expr/vm"
 	"github.com/rs/zerolog"
 
-	"modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/internal/config"
 )
 
 type dslEngine struct {

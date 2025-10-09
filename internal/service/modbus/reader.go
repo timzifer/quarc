@@ -11,9 +11,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/shopspring/decimal"
 
-	"modbus_processor/internal/config"
-	"modbus_processor/remote"
-	serviceio "modbus_processor/serviceio"
+	"github.com/timzifer/modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/remote"
+	serviceio "github.com/timzifer/modbus_processor/serviceio"
 )
 
 type readSignal struct {

@@ -13,13 +13,13 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"modbus_processor/internal/config"
-	"modbus_processor/internal/logging"
-	"modbus_processor/internal/reload"
-	"modbus_processor/internal/service"
-	"modbus_processor/programs"
-	"modbus_processor/serviceio"
-	"modbus_processor/telemetry"
+	"github.com/timzifer/modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/internal/logging"
+	"github.com/timzifer/modbus_processor/internal/reload"
+	"github.com/timzifer/modbus_processor/internal/service"
+	"github.com/timzifer/modbus_processor/programs"
+	"github.com/timzifer/modbus_processor/serviceio"
+	"github.com/timzifer/modbus_processor/telemetry"
 )
 
 // ReloadFunc represents a function that reloads the processor configuration.

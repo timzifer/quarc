@@ -11,7 +11,7 @@ import (
 	"github.com/prometheus/common/model"
 	"github.com/rs/zerolog"
 
-	"modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/internal/config"
 )
 
 // Setup creates a zerolog logger according to the provided configuration.

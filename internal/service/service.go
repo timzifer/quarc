@@ -12,11 +12,11 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"modbus_processor/internal/config"
-	"modbus_processor/internal/service/canstream"
-	"modbus_processor/internal/service/modbus"
-	"modbus_processor/remote"
-	serviceio "modbus_processor/serviceio"
+	"github.com/timzifer/modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/internal/service/canstream"
+	"github.com/timzifer/modbus_processor/internal/service/modbus"
+	"github.com/timzifer/modbus_processor/remote"
+	serviceio "github.com/timzifer/modbus_processor/serviceio"
 )
 
 // Service implements the deterministic three-phase controller.

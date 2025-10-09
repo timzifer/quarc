@@ -6,10 +6,10 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"modbus_processor/internal/config"
-	"modbus_processor/programs"
-	"modbus_processor/serviceio"
-	"modbus_processor/telemetry"
+	"github.com/timzifer/modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/programs"
+	"github.com/timzifer/modbus_processor/serviceio"
+	"github.com/timzifer/modbus_processor/telemetry"
 )
 
 // WithLogger provides a custom logger instance for the processor.

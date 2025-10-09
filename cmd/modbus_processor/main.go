@@ -14,9 +14,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"modbus_processor/internal/config"
-	"modbus_processor/internal/service"
-	"modbus_processor/processor"
+	"github.com/timzifer/modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/internal/service"
+	"github.com/timzifer/modbus_processor/processor"
 )
 
 func main() {

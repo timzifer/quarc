@@ -7,8 +7,8 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"modbus_processor/internal/config"
-	"modbus_processor/programs"
+	"github.com/timzifer/modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/programs"
 )
 
 type programInputBinding struct {

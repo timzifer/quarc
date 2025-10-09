@@ -6,7 +6,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/internal/config"
 )
 
 func TestConvertStandaloneDumpAndLogCalls(t *testing.T) {
