@@ -4,20 +4,19 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"modbus_processor/internal/config"
-	"modbus_processor/internal/logging"
-	"modbus_processor/internal/reload"
 	"modbus_processor/internal/service"
-	"modbus_processor/telemetry"
+	"modbus_processor/processor"
 )
 
 func main() {
@@ -49,42 +48,47 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	if cfg.HotReload {
-		collector, err := newTelemetryCollector(cfg.Telemetry)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "telemetry disabled: %v\n", err)
-			collector = telemetry.Noop()
-		}
-		if err := runWithHotReload(ctx, *cfgPath, cfg, *liveView, *liveViewListen, collector); err != nil {
-			if err == context.Canceled {
-				return
-			}
-			log.Fatal().Err(err).Msg("service stopped")
-		}
-		return
+	var reloadFn processor.ReloadFunc
+	options := []processor.Option{
+		processor.WithConfig(cfg),
+		processor.WithConfigPath(*cfgPath, func(fn processor.ReloadFunc) { reloadFn = fn }),
 	}
-
-	logger, cleanup, err := logging.Setup(cfg.Logging)
-	if err != nil {
-		log.Fatal().Err(err).Msg("failed to setup logger")
-	}
-	defer cleanup()
-	log.Logger = logger
-
-	srv, err := service.New(cfg, logger, nil)
-	if err != nil {
-		logger.Fatal().Err(err).Msg("failed to create service")
-	}
-	defer srv.Close()
 
 	if *liveView {
-		if err := srv.EnableLiveView(*liveViewListen); err != nil {
-			logger.Fatal().Err(err).Msg("failed to start live view")
-		}
+		host, port := parseListenAddress(*liveViewListen)
+		options = append(options, processor.WithLiveView(host, port))
 	}
 
-	if err := srv.Run(ctx); err != nil {
-		logger.Fatal().Err(err).Msg("service stopped with error")
+	proc, err := processor.New(ctx, options...)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to create processor")
+	}
+	defer proc.Close()
+
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				if reloadFn == nil {
+					continue
+				}
+				if err := reloadFn(ctx); err != nil {
+					log.Error().Err(err).Msg("failed to reload configuration")
+				}
+			}
+		}
+	}()
+
+	if err := proc.Run(ctx); err != nil {
+		if err == context.Canceled {
+			return
+		}
+		log.Fatal().Err(err).Msg("service stopped with error")
 	}
 }
 
@@ -219,124 +223,21 @@ func printDependencyGroup(title string, deps []service.DependencyReport, filter 
 	}
 }
 
-func runWithHotReload(ctx context.Context, cfgPath string, initialCfg *config.Config, liveView bool, liveViewListen string, collector telemetry.Collector) error {
-	if collector == nil {
-		collector = telemetry.Noop()
+func parseListenAddress(address string) (string, int) {
+	if address == "" {
+		return "", 0
 	}
-	watcher, err := reload.NewWatcher(cfgPath, initialCfg)
-	if err != nil {
-		return fmt.Errorf("create config watcher: %w", err)
+	if strings.HasPrefix(address, ":") {
+		port, _ := strconv.Atoi(strings.TrimPrefix(address, ":"))
+		return "", port
 	}
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	cfg := initialCfg
-	for {
-		logger, cleanup, err := logging.Setup(cfg.Logging)
-		if err != nil {
-			return err
-		}
-		log.Logger = logger
-
-		srv, err := service.New(cfg, logger, nil)
-		if err != nil {
-			cleanup()
-			return err
-		}
-
-		if liveView {
-			if err := srv.EnableLiveView(liveViewListen); err != nil {
-				srv.Close()
-				cleanup()
-				return err
-			}
-		}
-
-		runCtx, cancelRun := context.WithCancel(ctx)
-		errCh := make(chan error, 1)
-		go func() {
-			errCh <- srv.Run(runCtx)
-		}()
-
-		reloadRequested := false
-		var changed []string
-
-	loop:
-		for {
-			select {
-			case <-ctx.Done():
-				cancelRun()
-				if err := <-errCh; err != nil && err != context.Canceled && err != context.DeadlineExceeded {
-					srv.Close()
-					cleanup()
-					return err
-				}
-				srv.Close()
-				cleanup()
-				return ctx.Err()
-			case err := <-errCh:
-				srv.Close()
-				cleanup()
-				return err
-			case <-ticker.C:
-				changes, err := watcher.Check()
-				if err != nil {
-					logger.Error().Err(err).Msg("failed to check configuration changes")
-					continue
-				}
-				if len(changes) == 0 {
-					continue
-				}
-				newCfg, err := config.Load(cfgPath)
-				if err != nil {
-					logger.Error().Err(err).Msg("failed to reload configuration")
-					continue
-				}
-				if err := service.Validate(newCfg, logger); err != nil {
-					logger.Error().Err(err).Msg("reloaded configuration invalid")
-					continue
-				}
-				cancelRun()
-				if err := <-errCh; err != nil && err != context.Canceled && err != context.DeadlineExceeded {
-					logger.Error().Err(err).Msg("service stopped during reload")
-				}
-				srv.Close()
-				cleanup()
-				if err := watcher.Update(cfgPath, newCfg); err != nil {
-					logger.Error().Err(err).Msg("failed to update watcher state")
-				}
-				changed = changes
-				cfg = newCfg
-				reloadRequested = true
-				break loop
-			}
-		}
-
-		if !reloadRequested {
-			return nil
-		}
-		for _, file := range changed {
-			collector.IncHotReload(file)
-		}
-		reloadRequested = false
+	host, portStr, err := net.SplitHostPort(address)
+	if err == nil {
+		port, _ := strconv.Atoi(portStr)
+		return host, port
 	}
-}
-
-func newTelemetryCollector(cfg config.TelemetryConfig) (telemetry.Collector, error) {
-	if !cfg.Enabled {
-		return telemetry.Noop(), nil
-	}
-	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
-	switch provider {
-	case "", "prometheus":
-		collector, err := telemetry.NewPrometheusCollector(nil)
-		if err != nil {
-			return nil, err
-		}
-		return collector, nil
-	default:
-		return telemetry.Noop(), fmt.Errorf("unsupported telemetry provider %q", cfg.Provider)
-	}
+	port, _ := strconv.Atoi(address)
+	return "", port
 }
 
 func describeModule(ref config.ModuleReference) string {
