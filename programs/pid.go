@@ -3,7 +3,7 @@ package programs
 import (
 	"math"
 
-	"github.com/timzifer/modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/config"
 )
 
 type pidProgram struct {

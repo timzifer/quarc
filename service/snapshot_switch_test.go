@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/timzifer/modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/config"
 )
 
 func TestSnapshotSwitchIsolation(t *testing.T) {

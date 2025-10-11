@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/timzifer/modbus_processor/internal/config"
+	config2 "github.com/timzifer/modbus_processor/config"
 )
 
 type fileState struct {
@@ -22,7 +22,7 @@ type Watcher struct {
 }
 
 // NewWatcher builds a watcher with the known files from the configuration.
-func NewWatcher(root string, cfg *config.Config) (*Watcher, error) {
+func NewWatcher(root string, cfg *config2.Config) (*Watcher, error) {
 	watcher := &Watcher{}
 	if err := watcher.Update(root, cfg); err != nil {
 		return nil, err
@@ -31,11 +31,11 @@ func NewWatcher(root string, cfg *config.Config) (*Watcher, error) {
 }
 
 // Update rebuilds the tracked file list from the provided configuration.
-func (w *Watcher) Update(root string, cfg *config.Config) error {
+func (w *Watcher) Update(root string, cfg *config2.Config) error {
 	if w == nil {
 		return nil
 	}
-	paths := config.SourceFiles(cfg)
+	paths := config2.SourceFiles(cfg)
 	if root != "" {
 		abs, err := filepath.Abs(root)
 		if err == nil {

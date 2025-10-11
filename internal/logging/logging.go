@@ -10,8 +10,7 @@ import (
 	"github.com/grafana/loki-client-go/loki"
 	"github.com/prometheus/common/model"
 	"github.com/rs/zerolog"
-
-	"github.com/timzifer/modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/config"
 )
 
 // Setup creates a zerolog logger according to the provided configuration.

@@ -1,6 +1,8 @@
 package programs
 
-import "github.com/timzifer/modbus_processor/internal/config"
+import (
+	"github.com/timzifer/modbus_processor/config"
+)
 
 type rampProgram struct {
 	id        string

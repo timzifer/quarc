@@ -13,9 +13,9 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/timzifer/modbus_processor/config"
+	service2 "github.com/timzifer/modbus_processor/service"
 
-	"github.com/timzifer/modbus_processor/internal/config"
-	"github.com/timzifer/modbus_processor/internal/service"
 	"github.com/timzifer/modbus_processor/processor"
 )
 
@@ -97,11 +97,11 @@ func executeHealthCheck(path string) error {
 	if err != nil {
 		return err
 	}
-	return service.Validate(cfg, zerolog.Nop())
+	return service2.Validate(cfg, zerolog.Nop())
 }
 
 func executeConfigCheck(cfg *config.Config) int {
-	reports, err := service.AnalyzeLogic(cfg)
+	reports, err := service2.AnalyzeLogic(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "configuration invalid: %v\n", err)
 		return 1
@@ -128,9 +128,9 @@ func executeConfigCheck(cfg *config.Config) int {
 		printExpression("Valid expression", report.Valid)
 		printExpression("Quality expression", report.Quality)
 
-		printDependencyGroup("Expression dependencies", report.Dependencies, func(dep service.DependencyReport) bool { return dep.InExpression })
-		printDependencyGroup("Valid dependencies", report.Dependencies, func(dep service.DependencyReport) bool { return dep.InValid })
-		printDependencyGroup("Quality dependencies", report.Dependencies, func(dep service.DependencyReport) bool { return dep.InQuality })
+		printDependencyGroup("Expression dependencies", report.Dependencies, func(dep service2.DependencyReport) bool { return dep.InExpression })
+		printDependencyGroup("Valid dependencies", report.Dependencies, func(dep service2.DependencyReport) bool { return dep.InValid })
+		printDependencyGroup("Quality dependencies", report.Dependencies, func(dep service2.DependencyReport) bool { return dep.InQuality })
 
 		if len(report.Errors) > 0 {
 			exitCode = 1
@@ -165,9 +165,9 @@ func printExpression(label, expr string) {
 	}
 }
 
-func printDependencyGroup(title string, deps []service.DependencyReport, filter func(service.DependencyReport) bool) {
+func printDependencyGroup(title string, deps []service2.DependencyReport, filter func(service2.DependencyReport) bool) {
 	fmt.Printf("  %s:\n", title)
-	filtered := make([]service.DependencyReport, 0, len(deps))
+	filtered := make([]service2.DependencyReport, 0, len(deps))
 	for _, dep := range deps {
 		if filter(dep) {
 			filtered = append(filtered, dep)

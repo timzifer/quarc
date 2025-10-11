@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/timzifer/modbus_processor/config"
+	"github.com/timzifer/modbus_processor/service/canstream"
+	modbus2 "github.com/timzifer/modbus_processor/service/modbus"
 
-	"github.com/timzifer/modbus_processor/internal/config"
-	"github.com/timzifer/modbus_processor/internal/service/canstream"
-	"github.com/timzifer/modbus_processor/internal/service/modbus"
 	"github.com/timzifer/modbus_processor/remote"
 	serviceio "github.com/timzifer/modbus_processor/serviceio"
 )
@@ -165,11 +165,11 @@ func newFactoryRegistry(factory remote.ClientFactory) factoryRegistry {
 	}
 	return factoryRegistry{
 		readers: map[string]serviceio.ReaderFactory{
-			defaultDriver: modbus.NewReaderFactory(factory),
+			defaultDriver: modbus2.NewReaderFactory(factory),
 			canDriver:     canstream.NewReaderFactory(),
 		},
 		writers: map[string]serviceio.WriterFactory{
-			defaultDriver: modbus.NewWriterFactory(factory),
+			defaultDriver: modbus2.NewWriterFactory(factory),
 		},
 	}
 }

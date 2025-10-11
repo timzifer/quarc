@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/timzifer/modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/config"
 	"github.com/timzifer/modbus_processor/telemetry"
 )
 

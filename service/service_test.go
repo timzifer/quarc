@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/timzifer/modbus_processor/config"
 
-	"github.com/timzifer/modbus_processor/internal/config"
 	"github.com/timzifer/modbus_processor/remote"
 )
 

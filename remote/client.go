@@ -5,8 +5,7 @@ import (
 	"time"
 
 	"github.com/goburrow/modbus"
-
-	"github.com/timzifer/modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/config"
 )
 
 // Client defines the subset of Modbus operations required by the service.

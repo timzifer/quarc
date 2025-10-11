@@ -3,7 +3,7 @@ package programs
 import (
 	"sort"
 
-	"github.com/timzifer/modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/config"
 )
 
 type lowPassProgram struct {

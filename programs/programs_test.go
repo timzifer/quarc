@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/timzifer/modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/config"
 )
 
 func mustExecute(t *testing.T, prog Program, ctx Context, signals []Signal) []Signal {

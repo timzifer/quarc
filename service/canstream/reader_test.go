@@ -3,8 +3,7 @@ package canstream
 import (
 	"testing"
 
-	"github.com/timzifer/modbus_processor/internal/config"
-
+	"github.com/timzifer/modbus_processor/config"
 	"go.einride.tech/can/pkg/dbc"
 )
 

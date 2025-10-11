@@ -6,8 +6,7 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog"
-
-	"github.com/timzifer/modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/config"
 )
 
 type DependencyReport struct {

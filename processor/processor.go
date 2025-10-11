@@ -12,11 +12,11 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/timzifer/modbus_processor/config"
+	"github.com/timzifer/modbus_processor/service"
 
-	"github.com/timzifer/modbus_processor/internal/config"
 	"github.com/timzifer/modbus_processor/internal/logging"
 	"github.com/timzifer/modbus_processor/internal/reload"
-	"github.com/timzifer/modbus_processor/internal/service"
 	"github.com/timzifer/modbus_processor/programs"
 	"github.com/timzifer/modbus_processor/serviceio"
 	"github.com/timzifer/modbus_processor/telemetry"

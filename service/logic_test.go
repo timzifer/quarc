@@ -8,8 +8,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-
-	"github.com/timzifer/modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/config"
 )
 
 func TestPrepareLogicBlockAutoDependencies(t *testing.T) {

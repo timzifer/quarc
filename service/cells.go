@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+	"github.com/timzifer/modbus_processor/config"
 
-	"github.com/timzifer/modbus_processor/internal/config"
 	serviceio "github.com/timzifer/modbus_processor/serviceio"
 )
 

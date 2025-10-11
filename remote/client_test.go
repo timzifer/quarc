@@ -6,8 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/timzifer/modbus_processor/internal/config"
+	"github.com/timzifer/modbus_processor/config"
 )
 
 func TestNewTCPClientFactoryRequiresAddress(t *testing.T) {
