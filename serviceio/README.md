@@ -1,55 +1,31 @@
-# Service I/O Interfaces
+# Service I/O Interfaces (Deprecated)
 
-The `serviceio` package defines the interfaces that connect the scheduler with
-cell storage, read groups, and write targets. These abstractions allow the core
-service to orchestrate Modbus communication without depending on concrete
-protocol implementations.
+The `serviceio` package now only provides type aliases that point to the
+runtime packages introduced in `runtime/state`, `runtime/readers`, and
+`runtime/writers`. The aliases exist to support downstream consumers during the
+migration window and will be removed in a future release.
 
-## Interfaces
+New development should import the runtime packages directly:
 
-### `Cell`
-Maintains the current value, validity, and quality metadata for a logical signal.
-Implementations must be concurrency-safe, because both readers and writers may
-update cell state simultaneously.
+* `runtime/state` provides `Cell` and `CellStore` implementations.
+* `runtime/readers` defines `ReadGroup` and the associated factory helpers.
+* `runtime/writers` defines `Writer` types and dependencies.
 
-### `CellStore`
-Lookup facility used by the scheduler to resolve cell identifiers. Returning an
-error for unknown cells keeps misconfigured modules from silently failing.
-
-### `ReadGroup`
-Represents a scheduled poll of a contiguous Modbus address range. Read groups
-decide when they are due, execute reads, and expose diagnostic status.
-
-### `Writer`
-Flushes pending values back to Modbus targets. Writers are called on a fixed
-schedule and should handle transient failures by retrying or reporting status.
-
-### Factories
-`ReaderFactory` and `WriterFactory` receive configuration objects along with the
-dependencies they need to construct concrete instances.
-
-## Usage Example
+## Migration Guide
 
 ```go
-readGroup, err := myReaderFactory(cfg, serviceio.ReaderDependencies{Cells: store})
+import (
+    "github.com/timzifer/modbus_processor/runtime/readers"
+    "github.com/timzifer/modbus_processor/runtime/state"
+)
+
+group, err := myReaderFactory(cfg, readers.ReaderDependencies{Cells: store})
 if err != nil {
     return err
 }
-if readGroup.Due(time.Now()) {
-    readGroup.Perform(time.Now(), logger)
-}
+cell, err := store.Get("sensor") // state.Cell implementation
 ```
 
-## Implementation Notes
-
-* Keep `Due` and `Commit` implementations lightweight; they run frequently on
-  the scheduler's hot path.
-* Always update status metadata (`NextRun`, `LastDuration`, etc.) so operators
-  can diagnose communication issues.
-
-## Common Pitfalls
-
-* Failing to mark a read group as disabled when configuration requires it will
-  cause unnecessary Modbus traffic.
-* `Cell` implementations that don't deep copy mutable values risk data races
-  when referenced from multiple goroutines.
+Existing code that continues to import `serviceio` will keep compiling, but
+please update imports to the runtime packages to benefit from future
+improvements.

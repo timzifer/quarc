@@ -12,6 +12,18 @@ A deterministic, cyclic Modbus controller that executes four strictly separated 
 
 The cycle duration is monotonic (default `500ms` if unspecified). Metrics record last cycle duration, counts of read/eval/write errors and total cycles executed.
 
+## Runtime packages
+
+Interfaces used by the scheduler now live under the `runtime` namespace:
+
+* `runtime/state` – cell abstractions (`Cell`, `CellStore`).
+* `runtime/readers` – reader interfaces, status structures, and factories.
+* `runtime/writers` – writer interfaces, status structures, and factories.
+
+The legacy `serviceio` package still exports deprecated type aliases for
+backwards compatibility but will be removed in a future release. Update existing
+integrations to import the runtime packages directly.
+
 ### Runtime overrides
 
 Besides deterministic scheduling, the service exposes helper methods that make the controller easier to embed into a supervisory application:

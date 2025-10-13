@@ -12,11 +12,12 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/timzifer/modbus_processor/config"
+	"github.com/timzifer/modbus_processor/runtime/readers"
+	"github.com/timzifer/modbus_processor/runtime/writers"
 	"github.com/timzifer/modbus_processor/service/canstream"
 	modbus2 "github.com/timzifer/modbus_processor/service/modbus"
 
 	"github.com/timzifer/modbus_processor/remote"
-	serviceio "github.com/timzifer/modbus_processor/serviceio"
 )
 
 // Service implements the deterministic three-phase controller.
@@ -26,10 +27,10 @@ type Service struct {
 
 	cells     *cellStore
 	snapshots *snapshotSwitch
-	reads     []serviceio.ReadGroup
+	reads     []readers.ReadGroup
 	logic     []*logicBlock
 	ordered   []*logicBlock
-	writes    []serviceio.Writer
+	writes    []writers.Writer
 	server    *modbusServer
 	programs  []*programBinding
 	workers   workerSlots
@@ -155,8 +156,8 @@ const (
 type Option func(*factoryRegistry)
 
 type factoryRegistry struct {
-	readers map[string]serviceio.ReaderFactory
-	writers map[string]serviceio.WriterFactory
+	readers map[string]readers.ReaderFactory
+	writers map[string]writers.WriterFactory
 }
 
 func newFactoryRegistry(factory remote.ClientFactory) factoryRegistry {
@@ -164,11 +165,11 @@ func newFactoryRegistry(factory remote.ClientFactory) factoryRegistry {
 		factory = remote.NewTCPClientFactory()
 	}
 	return factoryRegistry{
-		readers: map[string]serviceio.ReaderFactory{
+		readers: map[string]readers.ReaderFactory{
 			defaultDriver: modbus2.NewReaderFactory(factory),
 			canDriver:     canstream.NewReaderFactory(),
 		},
-		writers: map[string]serviceio.WriterFactory{
+		writers: map[string]writers.WriterFactory{
 			defaultDriver: modbus2.NewWriterFactory(factory),
 		},
 	}
@@ -184,13 +185,13 @@ func applyOptions(reg factoryRegistry, opts []Option) factoryRegistry {
 }
 
 // WithReaderFactory registers or overrides a reader factory for a driver identifier.
-func WithReaderFactory(driver string, factory serviceio.ReaderFactory) Option {
+func WithReaderFactory(driver string, factory readers.ReaderFactory) Option {
 	return func(reg *factoryRegistry) {
 		if reg == nil {
 			return
 		}
 		if reg.readers == nil {
-			reg.readers = make(map[string]serviceio.ReaderFactory)
+			reg.readers = make(map[string]readers.ReaderFactory)
 		}
 		if driver == "" {
 			return
@@ -204,13 +205,13 @@ func WithReaderFactory(driver string, factory serviceio.ReaderFactory) Option {
 }
 
 // WithWriterFactory registers or overrides a writer factory for a driver identifier.
-func WithWriterFactory(driver string, factory serviceio.WriterFactory) Option {
+func WithWriterFactory(driver string, factory writers.WriterFactory) Option {
 	return func(reg *factoryRegistry) {
 		if reg == nil {
 			return
 		}
 		if reg.writers == nil {
-			reg.writers = make(map[string]serviceio.WriterFactory)
+			reg.writers = make(map[string]writers.WriterFactory)
 		}
 		if driver == "" {
 			return
@@ -237,7 +238,7 @@ func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory
 	if err != nil {
 		return nil, err
 	}
-	reads, err := buildReadGroups(cfg.Reads, serviceio.ReaderDependencies{Cells: cells}, registry.readers)
+	reads, err := buildReadGroups(cfg.Reads, readers.ReaderDependencies{Cells: cells}, registry.readers)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +250,7 @@ func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory
 	if err != nil {
 		return nil, err
 	}
-	writes, err := buildWriteTargets(cfg.Writes, serviceio.WriterDependencies{Cells: cells}, registry.writers)
+	writes, err := buildWriteTargets(cfg.Writes, writers.WriterDependencies{Cells: cells}, registry.writers)
 	if err != nil {
 		return nil, err
 	}
@@ -284,8 +285,8 @@ func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory
 	return svc, nil
 }
 
-func buildReadGroups(cfgs []config.ReadGroupConfig, deps serviceio.ReaderDependencies, factories map[string]serviceio.ReaderFactory) ([]serviceio.ReadGroup, error) {
-	groups := make([]serviceio.ReadGroup, 0, len(cfgs))
+func buildReadGroups(cfgs []config.ReadGroupConfig, deps readers.ReaderDependencies, factories map[string]readers.ReaderFactory) ([]readers.ReadGroup, error) {
+	groups := make([]readers.ReadGroup, 0, len(cfgs))
 	for _, cfg := range cfgs {
 		driver := cfg.Endpoint.Driver
 		if driver == "" {
@@ -304,7 +305,7 @@ func buildReadGroups(cfgs []config.ReadGroupConfig, deps serviceio.ReaderDepende
 	return groups, nil
 }
 
-func buildWriteTargets(cfgs []config.WriteTargetConfig, deps serviceio.WriterDependencies, factories map[string]serviceio.WriterFactory) ([]serviceio.Writer, error) {
+func buildWriteTargets(cfgs []config.WriteTargetConfig, deps writers.WriterDependencies, factories map[string]writers.WriterFactory) ([]writers.Writer, error) {
 	sorted := append([]config.WriteTargetConfig(nil), cfgs...)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		if sorted[i].Priority == sorted[j].Priority {
@@ -312,7 +313,7 @@ func buildWriteTargets(cfgs []config.WriteTargetConfig, deps serviceio.WriterDep
 		}
 		return sorted[i].Priority > sorted[j].Priority
 	})
-	targets := make([]serviceio.Writer, 0, len(sorted))
+	targets := make([]writers.Writer, 0, len(sorted))
 	for _, cfg := range sorted {
 		driver := cfg.Endpoint.Driver
 		if driver == "" {
@@ -346,7 +347,7 @@ func Validate(cfg *config.Config, logger zerolog.Logger, opts ...Option) error {
 	if err != nil {
 		return err
 	}
-	if _, err := buildReadGroups(cfg.Reads, serviceio.ReaderDependencies{Cells: cells}, registry.readers); err != nil {
+	if _, err := buildReadGroups(cfg.Reads, readers.ReaderDependencies{Cells: cells}, registry.readers); err != nil {
 		return err
 	}
 	if _, _, err := newLogicBlocks(cfg.Logic, cells, dsl, logger); err != nil {
@@ -355,7 +356,7 @@ func Validate(cfg *config.Config, logger zerolog.Logger, opts ...Option) error {
 	if _, err := newProgramBindings(cfg.Programs, cells, logger); err != nil {
 		return err
 	}
-	if _, err := buildWriteTargets(cfg.Writes, serviceio.WriterDependencies{Cells: cells}, registry.writers); err != nil {
+	if _, err := buildWriteTargets(cfg.Writes, writers.WriterDependencies{Cells: cells}, registry.writers); err != nil {
 		return err
 	}
 	if cfg.Server.Enabled {
@@ -422,7 +423,7 @@ func (s *Service) IterateOnce(ctx context.Context, now time.Time) error {
 }
 
 func (s *Service) readPhase(now time.Time) int {
-	due := make([]serviceio.ReadGroup, 0, len(s.reads))
+	due := make([]readers.ReadGroup, 0, len(s.reads))
 	for _, group := range s.reads {
 		if group.Due(now) {
 			due = append(due, group)
@@ -432,7 +433,7 @@ func (s *Service) readPhase(now time.Time) int {
 		return 0
 	}
 	slots := s.workers.readSlot()
-	errors, _ := runWorkersWithLoad(context.Background(), &s.load.read, slots, due, func(_ context.Context, group serviceio.ReadGroup) int {
+	errors, _ := runWorkersWithLoad(context.Background(), &s.load.read, slots, due, func(_ context.Context, group readers.ReadGroup) int {
 		return group.Perform(now, s.logger)
 	})
 	return errors
@@ -447,7 +448,7 @@ func (s *Service) commitPhase(ctx context.Context, now time.Time) int {
 		return 0
 	}
 	slots := s.workers.writeSlot()
-	errors, _ := runWorkersWithLoad(ctx, &s.load.write, slots, s.writes, func(c context.Context, target serviceio.Writer) int {
+	errors, _ := runWorkersWithLoad(ctx, &s.load.write, slots, s.writes, func(c context.Context, target writers.Writer) int {
 		if err := c.Err(); err != nil {
 			return 0
 		}
@@ -575,30 +576,30 @@ func (s *Service) UpdateCell(id string, value interface{}, hasValue bool, qualit
 }
 
 // SetReadGroupDisabled toggles a read group at runtime.
-func (s *Service) SetReadGroupDisabled(id string, disabled bool) (serviceio.ReadGroupStatus, error) {
+func (s *Service) SetReadGroupDisabled(id string, disabled bool) (readers.ReadGroupStatus, error) {
 	for _, group := range s.reads {
 		if group.ID() == id {
 			group.SetDisabled(disabled)
 			return group.Status(), nil
 		}
 	}
-	return serviceio.ReadGroupStatus{}, fmt.Errorf("read group %s not found", id)
+	return readers.ReadGroupStatus{}, fmt.Errorf("read group %s not found", id)
 }
 
 // SetWriteTargetDisabled toggles a write target at runtime.
-func (s *Service) SetWriteTargetDisabled(id string, disabled bool) (serviceio.WriteTargetStatus, error) {
+func (s *Service) SetWriteTargetDisabled(id string, disabled bool) (writers.WriteTargetStatus, error) {
 	for _, target := range s.writes {
 		if target.ID() == id {
 			target.SetDisabled(disabled)
 			return target.Status(), nil
 		}
 	}
-	return serviceio.WriteTargetStatus{}, fmt.Errorf("write target %s not found", id)
+	return writers.WriteTargetStatus{}, fmt.Errorf("write target %s not found", id)
 }
 
 // ReadStatuses returns a snapshot of configured read groups.
-func (s *Service) ReadStatuses() []serviceio.ReadGroupStatus {
-	statuses := make([]serviceio.ReadGroupStatus, 0, len(s.reads))
+func (s *Service) ReadStatuses() []readers.ReadGroupStatus {
+	statuses := make([]readers.ReadGroupStatus, 0, len(s.reads))
 	for _, group := range s.reads {
 		statuses = append(statuses, group.Status())
 	}
@@ -607,8 +608,8 @@ func (s *Service) ReadStatuses() []serviceio.ReadGroupStatus {
 }
 
 // WriteStatuses returns a snapshot of configured write targets.
-func (s *Service) WriteStatuses() []serviceio.WriteTargetStatus {
-	statuses := make([]serviceio.WriteTargetStatus, 0, len(s.writes))
+func (s *Service) WriteStatuses() []writers.WriteTargetStatus {
+	statuses := make([]writers.WriteTargetStatus, 0, len(s.writes))
 	for _, target := range s.writes {
 		statuses = append(statuses, target.Status())
 	}

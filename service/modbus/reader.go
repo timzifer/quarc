@@ -13,12 +13,13 @@ import (
 	"github.com/timzifer/modbus_processor/config"
 
 	"github.com/timzifer/modbus_processor/remote"
-	serviceio "github.com/timzifer/modbus_processor/serviceio"
+	runtimeReaders "github.com/timzifer/modbus_processor/runtime/readers"
+	"github.com/timzifer/modbus_processor/runtime/state"
 )
 
 type readSignal struct {
 	cfg        config.ReadSignalConfig
-	cell       serviceio.Cell
+	cell       state.Cell
 	cellConfig config.CellConfig
 }
 
@@ -35,16 +36,16 @@ type readGroup struct {
 }
 
 // NewReaderFactory builds a Modbus read group factory.
-func NewReaderFactory(factory remote.ClientFactory) serviceio.ReaderFactory {
+func NewReaderFactory(factory remote.ClientFactory) runtimeReaders.ReaderFactory {
 	if factory == nil {
 		factory = remote.NewTCPClientFactory()
 	}
-	return func(cfg config.ReadGroupConfig, deps serviceio.ReaderDependencies) (serviceio.ReadGroup, error) {
+	return func(cfg config.ReadGroupConfig, deps runtimeReaders.ReaderDependencies) (runtimeReaders.ReadGroup, error) {
 		return newReadGroup(cfg, deps, factory)
 	}
 }
 
-func newReadGroup(cfg config.ReadGroupConfig, deps serviceio.ReaderDependencies, factory remote.ClientFactory) (serviceio.ReadGroup, error) {
+func newReadGroup(cfg config.ReadGroupConfig, deps runtimeReaders.ReaderDependencies, factory remote.ClientFactory) (runtimeReaders.ReadGroup, error) {
 	if deps.Cells == nil {
 		return nil, fmt.Errorf("read group %s: missing cell store", cfg.ID)
 	}
@@ -197,13 +198,13 @@ func (g *readGroup) SetDisabled(disabled bool) {
 	}
 }
 
-func (g *readGroup) Status() serviceio.ReadGroupStatus {
+func (g *readGroup) Status() runtimeReaders.ReadGroupStatus {
 	g.mu.RLock()
 	next := g.next
 	lastRun := g.lastRun
 	lastDuration := g.lastDuration
 	g.mu.RUnlock()
-	return serviceio.ReadGroupStatus{
+	return runtimeReaders.ReadGroupStatus{
 		ID:           g.cfg.ID,
 		Function:     g.cfg.Function,
 		Start:        g.cfg.Start,
