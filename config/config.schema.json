@@ -346,6 +346,11 @@
         },
         "can": {
           "$ref": "#/definitions/canReadGroupConfig"
+        },
+        "driver_settings": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Driver-specific configuration passed to the registered reader factory."
         }
       },
       "additionalProperties": false
@@ -395,6 +400,11 @@
         },
         "disable": {
           "type": "boolean"
+        },
+        "driver_settings": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Driver-specific configuration passed to the registered writer factory."
         }
       },
       "additionalProperties": false

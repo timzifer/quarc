@@ -11,8 +11,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/timzifer/modbus_processor/config"
-
-	"github.com/timzifer/modbus_processor/remote"
+	modbusdrv "github.com/timzifer/modbus_processor/drivers/modbus"
 )
 
 type fakeClient struct {
@@ -64,6 +63,13 @@ func (c *countingClient) Close() error {
 	return nil
 }
 
+func modbusOptions(factory modbusdrv.ClientFactory) []Option {
+	return []Option{
+		WithReaderFactory("modbus", modbusdrv.NewReaderFactory(factory)),
+		WithWriterFactory("modbus", modbusdrv.NewWriterFactory(factory)),
+	}
+}
+
 func TestDeterministicCycle(t *testing.T) {
 	client := &fakeClient{}
 	client.readHoldingFn = func(address, quantity uint16) ([]byte, error) {
@@ -74,7 +80,7 @@ func TestDeterministicCycle(t *testing.T) {
 		return nil, nil
 	}
 
-	factory := func(config.EndpointConfig) (remote.Client, error) {
+	factory := func(config.EndpointConfig) (modbusdrv.Client, error) {
 		return client, nil
 	}
 
@@ -128,7 +134,7 @@ func TestDeterministicCycle(t *testing.T) {
 	}
 
 	logger := zerolog.New(io.Discard)
-	svc, err := New(cfg, logger, factory)
+	svc, err := New(cfg, logger, modbusOptions(factory)...)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
@@ -200,9 +206,7 @@ func TestProgramsExecuteBeforeLogic(t *testing.T) {
 	}
 
 	logger := zerolog.New(io.Discard)
-	svc, err := New(cfg, logger, func(config.EndpointConfig) (remote.Client, error) {
-		return &fakeClient{}, nil
-	})
+	svc, err := New(cfg, logger)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
@@ -249,9 +253,7 @@ func TestExpressionHandlesInvalidDependency(t *testing.T) {
 	}
 
 	logger := zerolog.New(io.Discard)
-	svc, err := New(cfg, logger, func(config.EndpointConfig) (remote.Client, error) {
-		return &fakeClient{}, nil
-	})
+	svc, err := New(cfg, logger)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
@@ -297,9 +299,7 @@ func TestCycleDetection(t *testing.T) {
 	}
 
 	logger := zerolog.New(io.Discard)
-	if _, err := New(cfg, logger, func(config.EndpointConfig) (remote.Client, error) {
-		return &fakeClient{}, nil
-	}); err == nil {
+	if _, err := New(cfg, logger); err == nil {
 		t.Fatalf("expected cycle detection error")
 	}
 }
@@ -319,7 +319,7 @@ func TestServiceCloseShutsDownServerConnections(t *testing.T) {
 	}
 
 	logger := zerolog.New(io.Discard)
-	svc, err := New(cfg, logger, nil)
+	svc, err := New(cfg, logger)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
@@ -375,9 +375,7 @@ func TestModbusServerExposesCells(t *testing.T) {
 	}
 
 	logger := zerolog.New(io.Discard)
-	svc, err := New(cfg, logger, func(config.EndpointConfig) (remote.Client, error) {
-		return &fakeClient{}, nil
-	})
+	svc, err := New(cfg, logger)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
@@ -466,9 +464,7 @@ func TestServiceManualCellOperations(t *testing.T) {
 		Cells: []config.CellConfig{{ID: "manual", Type: config.ValueKindNumber}},
 	}
 	logger := zerolog.New(io.Discard)
-	svc, err := New(cfg, logger, func(config.EndpointConfig) (remote.Client, error) {
-		return &fakeClient{}, nil
-	})
+	svc, err := New(cfg, logger)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
@@ -548,7 +544,7 @@ func TestServiceClosesRemoteClients(t *testing.T) {
 	}
 
 	clients := make([]*countingClient, 0, 2)
-	factory := func(config.EndpointConfig) (remote.Client, error) {
+	factory := func(config.EndpointConfig) (modbusdrv.Client, error) {
 		client := &countingClient{}
 		client.readHoldingFn = func(address, quantity uint16) ([]byte, error) {
 			return []byte{0x00, 0x01}, nil
@@ -561,7 +557,7 @@ func TestServiceClosesRemoteClients(t *testing.T) {
 	}
 
 	logger := zerolog.New(io.Discard)
-	svc, err := New(cfg, logger, factory)
+	svc, err := New(cfg, logger, modbusOptions(factory)...)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
@@ -599,9 +595,7 @@ func TestSetCellValueUpdatesServerImmediately(t *testing.T) {
 		},
 	}
 	logger := zerolog.New(io.Discard)
-	svc, err := New(cfg, logger, func(config.EndpointConfig) (remote.Client, error) {
-		return &fakeClient{}, nil
-	})
+	svc, err := New(cfg, logger)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}

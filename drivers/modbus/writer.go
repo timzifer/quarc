@@ -12,7 +12,6 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/timzifer/modbus_processor/config"
 
-	"github.com/timzifer/modbus_processor/remote"
 	"github.com/timzifer/modbus_processor/runtime/state"
 	runtimeWriters "github.com/timzifer/modbus_processor/runtime/writers"
 )
@@ -20,8 +19,8 @@ import (
 type writeTarget struct {
 	cfg           config.WriteTargetConfig
 	cell          state.Cell
-	clientFactory remote.ClientFactory
-	client        remote.Client
+	clientFactory ClientFactory
+	client        Client
 	lastValue     interface{}
 	lastWrite     time.Time
 	mu            sync.RWMutex
@@ -31,31 +30,38 @@ type writeTarget struct {
 }
 
 // NewWriterFactory builds a Modbus write target factory.
-func NewWriterFactory(factory remote.ClientFactory) runtimeWriters.WriterFactory {
+func NewWriterFactory(factory ClientFactory) runtimeWriters.WriterFactory {
 	if factory == nil {
-		factory = remote.NewTCPClientFactory()
+		factory = NewTCPClientFactory()
 	}
 	return func(cfg config.WriteTargetConfig, deps runtimeWriters.WriterDependencies) (runtimeWriters.Writer, error) {
 		return newWriteTarget(cfg, deps, factory)
 	}
 }
 
-func newWriteTarget(cfg config.WriteTargetConfig, deps runtimeWriters.WriterDependencies, factory remote.ClientFactory) (runtimeWriters.Writer, error) {
+func newWriteTarget(cfg config.WriteTargetConfig, deps runtimeWriters.WriterDependencies, factory ClientFactory) (runtimeWriters.Writer, error) {
 	if deps.Cells == nil {
 		return nil, fmt.Errorf("write target %s: missing cell store", cfg.ID)
 	}
 	if cfg.ID == "" {
 		return nil, fmt.Errorf("write target id must not be empty")
 	}
-	if cfg.Function == "" {
-		return nil, fmt.Errorf("write target %s missing function", cfg.ID)
-	}
-	cell, err := deps.Cells.Get(cfg.Cell)
+	resolved, err := resolveWriteTarget(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("write target %s: %w", cfg.ID, err)
+		return nil, err
 	}
-	target := &writeTarget{cfg: cfg, cell: cell, clientFactory: factory}
-	target.disabled.Store(cfg.Disable)
+	if resolved.Function == "" {
+		return nil, fmt.Errorf("write target %s missing function", resolved.ID)
+	}
+	if resolved.Cell == "" {
+		return nil, fmt.Errorf("write target %s missing cell", resolved.ID)
+	}
+	cell, err := deps.Cells.Get(resolved.Cell)
+	if err != nil {
+		return nil, fmt.Errorf("write target %s: %w", resolved.ID, err)
+	}
+	target := &writeTarget{cfg: resolved, cell: cell, clientFactory: factory}
+	target.disabled.Store(resolved.Disable)
 	return target, nil
 }
 
@@ -197,7 +203,7 @@ func (t *writeTarget) recordAttempt(ts time.Time, duration time.Duration) {
 	t.mu.Unlock()
 }
 
-func (t *writeTarget) ensureClient() (remote.Client, error) {
+func (t *writeTarget) ensureClient() (Client, error) {
 	if t.client != nil {
 		return t.client, nil
 	}
@@ -212,7 +218,7 @@ func (t *writeTarget) ensureClient() (remote.Client, error) {
 	return client, nil
 }
 
-func (t *writeTarget) performWrite(client remote.Client, value interface{}) error {
+func (t *writeTarget) performWrite(client Client, value interface{}) error {
 	switch strings.ToLower(t.cfg.Function) {
 	case "coil", "coils":
 		boolVal, ok := value.(bool)

@@ -8,6 +8,7 @@ import (
 	"github.com/timzifer/modbus_processor/config"
 
 	"github.com/timzifer/modbus_processor/programs"
+	"github.com/timzifer/modbus_processor/service"
 	"github.com/timzifer/modbus_processor/serviceio"
 	"github.com/timzifer/modbus_processor/telemetry"
 )
@@ -42,6 +43,17 @@ func WithIOService(def IOServiceDefinition) Option {
 			return nil
 		}
 		cfg.ioServices = append(cfg.ioServices, def)
+		return nil
+	}
+}
+
+// WithServiceOptions appends service options that will be forwarded to service.New.
+func WithServiceOptions(opts ...service.Option) Option {
+	return func(cfg *settings) error {
+		if cfg == nil {
+			return nil
+		}
+		cfg.serviceOptions = append(cfg.serviceOptions, opts...)
 		return nil
 	}
 }

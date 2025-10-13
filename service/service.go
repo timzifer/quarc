@@ -14,10 +14,6 @@ import (
 	"github.com/timzifer/modbus_processor/config"
 	"github.com/timzifer/modbus_processor/runtime/readers"
 	"github.com/timzifer/modbus_processor/runtime/writers"
-	"github.com/timzifer/modbus_processor/service/canstream"
-	modbus2 "github.com/timzifer/modbus_processor/service/modbus"
-
-	"github.com/timzifer/modbus_processor/remote"
 )
 
 // Service implements the deterministic three-phase controller.
@@ -150,7 +146,6 @@ func (s systemLoad) snapshot() systemLoadSnapshot {
 
 const (
 	defaultDriver = "modbus"
-	canDriver     = "can"
 )
 
 type Option func(*factoryRegistry)
@@ -160,18 +155,10 @@ type factoryRegistry struct {
 	writers map[string]writers.WriterFactory
 }
 
-func newFactoryRegistry(factory remote.ClientFactory) factoryRegistry {
-	if factory == nil {
-		factory = remote.NewTCPClientFactory()
-	}
+func newFactoryRegistry() factoryRegistry {
 	return factoryRegistry{
-		readers: map[string]readers.ReaderFactory{
-			defaultDriver: modbus2.NewReaderFactory(factory),
-			canDriver:     canstream.NewReaderFactory(),
-		},
-		writers: map[string]writers.WriterFactory{
-			defaultDriver: modbus2.NewWriterFactory(factory),
-		},
+		readers: make(map[string]readers.ReaderFactory),
+		writers: make(map[string]writers.WriterFactory),
 	}
 }
 
@@ -225,11 +212,11 @@ func WithWriterFactory(driver string, factory writers.WriterFactory) Option {
 }
 
 // New builds a service from configuration and dependencies.
-func New(cfg *config.Config, logger zerolog.Logger, factory remote.ClientFactory, opts ...Option) (*Service, error) {
+func New(cfg *config.Config, logger zerolog.Logger, opts ...Option) (*Service, error) {
 	if cfg == nil {
 		return nil, errors.New("config must not be nil")
 	}
-	registry := applyOptions(newFactoryRegistry(factory), opts)
+	registry := applyOptions(newFactoryRegistry(), opts)
 	dsl, err := newDSLEngine(cfg.DSL, cfg.Helpers, logger)
 	if err != nil {
 		return nil, err
@@ -338,7 +325,7 @@ func Validate(cfg *config.Config, logger zerolog.Logger, opts ...Option) error {
 		return errors.New("config must not be nil")
 	}
 
-	registry := applyOptions(newFactoryRegistry(nil), opts)
+	registry := applyOptions(newFactoryRegistry(), opts)
 	dsl, err := newDSLEngine(cfg.DSL, cfg.Helpers, logger)
 	if err != nil {
 		return err

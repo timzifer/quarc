@@ -12,7 +12,6 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/timzifer/modbus_processor/config"
 
-	"github.com/timzifer/modbus_processor/remote"
 	runtimeReaders "github.com/timzifer/modbus_processor/runtime/readers"
 	"github.com/timzifer/modbus_processor/runtime/state"
 )
@@ -27,8 +26,8 @@ type readGroup struct {
 	cfg           config.ReadGroupConfig
 	signals       []readSignal
 	next          time.Time
-	clientFactory remote.ClientFactory
-	client        remote.Client
+	clientFactory ClientFactory
+	client        Client
 	mu            sync.RWMutex
 	disabled      atomic.Bool
 	lastRun       time.Time
@@ -36,41 +35,45 @@ type readGroup struct {
 }
 
 // NewReaderFactory builds a Modbus read group factory.
-func NewReaderFactory(factory remote.ClientFactory) runtimeReaders.ReaderFactory {
+func NewReaderFactory(factory ClientFactory) runtimeReaders.ReaderFactory {
 	if factory == nil {
-		factory = remote.NewTCPClientFactory()
+		factory = NewTCPClientFactory()
 	}
 	return func(cfg config.ReadGroupConfig, deps runtimeReaders.ReaderDependencies) (runtimeReaders.ReadGroup, error) {
 		return newReadGroup(cfg, deps, factory)
 	}
 }
 
-func newReadGroup(cfg config.ReadGroupConfig, deps runtimeReaders.ReaderDependencies, factory remote.ClientFactory) (runtimeReaders.ReadGroup, error) {
+func newReadGroup(cfg config.ReadGroupConfig, deps runtimeReaders.ReaderDependencies, factory ClientFactory) (runtimeReaders.ReadGroup, error) {
 	if deps.Cells == nil {
 		return nil, fmt.Errorf("read group %s: missing cell store", cfg.ID)
 	}
 	if cfg.ID == "" {
 		return nil, fmt.Errorf("read group id must not be empty")
 	}
-	if cfg.Length == 0 {
-		return nil, fmt.Errorf("read group %s length must be >0", cfg.ID)
+	resolved, err := resolveReadGroup(cfg)
+	if err != nil {
+		return nil, err
 	}
-	if cfg.Function == "" {
-		return nil, fmt.Errorf("read group %s missing function", cfg.ID)
+	if resolved.Length == 0 {
+		return nil, fmt.Errorf("read group %s length must be >0", resolved.ID)
 	}
-	group := &readGroup{cfg: cfg, clientFactory: factory}
-	group.disabled.Store(cfg.Disable)
-	for _, sigCfg := range cfg.Signals {
+	if resolved.Function == "" {
+		return nil, fmt.Errorf("read group %s missing function", resolved.ID)
+	}
+	group := &readGroup{cfg: resolved, clientFactory: factory}
+	group.disabled.Store(resolved.Disable)
+	for _, sigCfg := range resolved.Signals {
 		cell, err := deps.Cells.Get(sigCfg.Cell)
 		if err != nil {
-			return nil, fmt.Errorf("read group %s: %w", cfg.ID, err)
+			return nil, fmt.Errorf("read group %s: %w", resolved.ID, err)
 		}
 		cellCfg := cell.Config()
 		if sigCfg.Type == "" {
 			sigCfg.Type = cellCfg.Type
 		}
 		if cellCfg.Type != sigCfg.Type {
-			return nil, fmt.Errorf("read group %s signal %s type mismatch (cell %s is %s, signal is %s)", cfg.ID, sigCfg.Cell, sigCfg.Cell, cellCfg.Type, sigCfg.Type)
+			return nil, fmt.Errorf("read group %s signal %s type mismatch (cell %s is %s, signal is %s)", resolved.ID, sigCfg.Cell, sigCfg.Cell, cellCfg.Type, sigCfg.Type)
 		}
 		group.signals = append(group.signals, readSignal{cfg: sigCfg, cell: cell, cellConfig: cellCfg})
 	}
@@ -153,7 +156,7 @@ func (g *readGroup) Perform(now time.Time, logger zerolog.Logger) int {
 	return errors
 }
 
-func (g *readGroup) ensureClient() (remote.Client, error) {
+func (g *readGroup) ensureClient() (Client, error) {
 	if g.client != nil {
 		return g.client, nil
 	}
@@ -168,7 +171,7 @@ func (g *readGroup) ensureClient() (remote.Client, error) {
 	return client, nil
 }
 
-func (g *readGroup) read(client remote.Client) ([]byte, error) {
+func (g *readGroup) read(client Client) ([]byte, error) {
 	switch strings.ToLower(g.cfg.Function) {
 	case "coil", "coils":
 		return client.ReadCoils(g.cfg.Start, g.cfg.Length)

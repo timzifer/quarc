@@ -150,16 +150,17 @@ type ReadSignalConfig struct {
 
 // ReadGroupConfig describes a block read.
 type ReadGroupConfig struct {
-	ID       string              `yaml:"id"`
-	Endpoint EndpointConfig      `yaml:"endpoint"`
-	Function string              `yaml:"function"`
-	Start    uint16              `yaml:"start"`
-	Length   uint16              `yaml:"length"`
-	TTL      Duration            `yaml:"ttl"`
-	Signals  []ReadSignalConfig  `yaml:"signals"`
-	Disable  bool                `yaml:"disable,omitempty"`
-	CAN      *CANReadGroupConfig `yaml:"can,omitempty"`
-	Source   ModuleReference     `yaml:"-"`
+	ID             string              `yaml:"id"`
+	Endpoint       EndpointConfig      `yaml:"endpoint"`
+	Function       string              `yaml:"function"`
+	Start          uint16              `yaml:"start"`
+	Length         uint16              `yaml:"length"`
+	TTL            Duration            `yaml:"ttl"`
+	Signals        []ReadSignalConfig  `yaml:"signals"`
+	Disable        bool                `yaml:"disable,omitempty"`
+	CAN            *CANReadGroupConfig `yaml:"can,omitempty"`
+	DriverSettings *yaml.Node          `yaml:"driver_settings,omitempty"`
+	Source         ModuleReference     `yaml:"-"`
 }
 
 // CANReadGroupConfig describes how CAN frames should be ingested from a byte stream.
@@ -192,19 +193,20 @@ type CANSignalBindingConfig struct {
 
 // WriteTargetConfig describes how a cell is pushed to Modbus.
 type WriteTargetConfig struct {
-	ID         string          `yaml:"id"`
-	Cell       string          `yaml:"cell"`
-	Endpoint   EndpointConfig  `yaml:"endpoint"`
-	Function   string          `yaml:"function"`
-	Address    uint16          `yaml:"address"`
-	Scale      float64         `yaml:"scale,omitempty"`
-	Endianness string          `yaml:"endianness,omitempty"`
-	Signed     bool            `yaml:"signed,omitempty"`
-	Deadband   float64         `yaml:"deadband,omitempty"`
-	RateLimit  Duration        `yaml:"rate_limit,omitempty"`
-	Priority   int             `yaml:"priority,omitempty"`
-	Disable    bool            `yaml:"disable,omitempty"`
-	Source     ModuleReference `yaml:"-"`
+	ID             string          `yaml:"id"`
+	Cell           string          `yaml:"cell"`
+	Endpoint       EndpointConfig  `yaml:"endpoint"`
+	Function       string          `yaml:"function"`
+	Address        uint16          `yaml:"address"`
+	Scale          float64         `yaml:"scale,omitempty"`
+	Endianness     string          `yaml:"endianness,omitempty"`
+	Signed         bool            `yaml:"signed,omitempty"`
+	Deadband       float64         `yaml:"deadband,omitempty"`
+	RateLimit      Duration        `yaml:"rate_limit,omitempty"`
+	Priority       int             `yaml:"priority,omitempty"`
+	Disable        bool            `yaml:"disable,omitempty"`
+	DriverSettings *yaml.Node      `yaml:"driver_settings,omitempty"`
+	Source         ModuleReference `yaml:"-"`
 }
 
 // ProgramSignalConfig maps a program signal onto a cell.
