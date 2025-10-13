@@ -101,19 +101,24 @@ func executeHealthCheck(path string) error {
 }
 
 func executeConfigCheck(cfg *config.Config) int {
-	reports, err := service2.AnalyzeLogic(cfg)
+	analysis, err := service2.AnalyzeLogic(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "configuration invalid: %v\n", err)
 		return 1
 	}
 
-	if len(reports) == 0 {
+	if analysis == nil {
+		fmt.Println("No logic blocks configured.")
+		return 0
+	}
+
+	if len(analysis.Blocks) == 0 {
 		fmt.Println("No logic blocks configured.")
 		return 0
 	}
 
 	exitCode := 0
-	for _, report := range reports {
+	for _, report := range analysis.Blocks {
 		fmt.Printf("Logic block %q\n", report.ID)
 		if module := describeModule(report.Source); module != "" {
 			fmt.Printf("  Module: %s\n", module)
@@ -142,6 +147,26 @@ func executeConfigCheck(cfg *config.Config) int {
 			fmt.Println("  Status: OK")
 		}
 
+		fmt.Println()
+	}
+
+	if len(analysis.UnwrittenCells) > 0 {
+		fmt.Println("Warnings:")
+		for _, cell := range analysis.UnwrittenCells {
+			typeLabel := "unknown"
+			if cell.Type != "" {
+				typeLabel = string(cell.Type)
+			}
+			notes := make([]string, 0, 2)
+			if module := describeModule(cell.Source); module != "" {
+				notes = append(notes, fmt.Sprintf("module %s", module))
+			}
+			fmt.Printf("  - Cell %s (%s) has no writers", cell.Cell, typeLabel)
+			if len(notes) > 0 {
+				fmt.Printf(" [%s]", strings.Join(notes, ", "))
+			}
+			fmt.Println()
+		}
 		fmt.Println()
 	}
 
