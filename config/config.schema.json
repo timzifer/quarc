@@ -1,0 +1,661 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/modbus/config.schema.json",
+  "title": "Modbus Processor Configuration",
+  "type": "object",
+  "required": ["package"],
+  "additionalProperties": true,
+  "properties": {
+    "package": {
+      "type": "string",
+      "description": "Logical package path used to group configuration modules."
+    },
+    "name": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "cycle": {
+      "$ref": "#/definitions/duration"
+    },
+    "hot_reload": {
+      "type": "boolean"
+    },
+    "template": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["object", "array", "string", "number", "boolean", "null"]
+      }
+    },
+    "modules": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "required": ["path"],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "values": {
+      "type": "array",
+      "description": "List of value files (ending in .values.yaml/.values.yml) or inline mappings merged into the configuration scope.",
+      "items": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "additionalProperties": {
+              "type": ["object", "array", "string", "number", "boolean", "null"]
+            }
+          }
+        ]
+      }
+    },
+    "logging": {
+      "$ref": "#/definitions/loggingConfig"
+    },
+    "telemetry": {
+      "$ref": "#/definitions/telemetryConfig"
+    },
+    "workers": {
+      "$ref": "#/definitions/workerSlots"
+    },
+    "programs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/programConfig"
+      }
+    },
+    "cells": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/cellConfig"
+      }
+    },
+    "reads": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/readGroupConfig"
+      }
+    },
+    "writes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/writeTargetConfig"
+      }
+    },
+    "logic": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/logicBlockConfig"
+      }
+    },
+    "dsl": {
+      "$ref": "#/definitions/dslConfig"
+    },
+    "helpers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/helperFunctionConfig"
+      }
+    },
+    "policies": {
+      "$ref": "#/definitions/globalPolicies"
+    },
+    "server": {
+      "$ref": "#/definitions/serverConfig"
+    }
+  },
+  "definitions": {
+    "duration": {
+      "type": "string",
+      "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+?$",
+      "description": "String duration as accepted by Go (e.g. 500ms, 1s, 5m)."
+    },
+    "valueKind": {
+      "type": "string",
+      "enum": [
+        "number",
+        "float",
+        "integer",
+        "decimal",
+        "bool",
+        "string",
+        "date"
+      ]
+    },
+    "endpointConfig": {
+      "type": "object",
+      "required": ["address"],
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "unit_id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "timeout": {
+          "$ref": "#/definitions/duration"
+        },
+        "driver": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "cellConfig": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/definitions/valueKind"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "ttl": {
+          "$ref": "#/definitions/duration"
+        },
+        "scale": {
+          "type": "number"
+        },
+        "constant": {},
+        "metadata": {},
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "readSignalConfig": {
+      "type": "object",
+      "required": ["cell", "offset", "type"],
+      "properties": {
+        "cell": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15
+        },
+        "type": {
+          "$ref": "#/definitions/valueKind"
+        },
+        "scale": {
+          "type": "number"
+        },
+        "endianness": {
+          "type": "string",
+          "enum": ["big", "little", "mid-big", "mid-little"],
+          "description": "Byte order override for the signal."
+        },
+        "signed": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "canSignalBinding": {
+      "type": "object",
+      "required": ["name", "cell"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "cell": {
+          "type": "string"
+        },
+        "scale": {
+          "type": "number"
+        },
+        "offset": {
+          "type": "number"
+        },
+        "quality": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    },
+    "canFrameBinding": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "frame_id": {
+          "type": "string"
+        },
+        "extended": {
+          "type": "boolean"
+        },
+        "channel": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "signals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/canSignalBinding"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "canReadGroupConfig": {
+      "type": "object",
+      "required": ["dbc", "frames"],
+      "properties": {
+        "protocol": {
+          "type": "string",
+          "enum": ["udp", "tcp"]
+        },
+        "mode": {
+          "type": "string"
+        },
+        "dbc": {
+          "type": "string"
+        },
+        "buffer_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "read_timeout": {
+          "$ref": "#/definitions/duration"
+        },
+        "frames": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/canFrameBinding"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "readGroupConfig": {
+      "type": "object",
+      "required": ["id", "endpoint", "function", "start", "length", "ttl", "signals"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "endpoint": {
+          "$ref": "#/definitions/endpointConfig"
+        },
+        "function": {
+          "type": "string",
+          "enum": [
+            "coil",
+            "discrete",
+            "input",
+            "holding"
+          ]
+        },
+        "start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ttl": {
+          "$ref": "#/definitions/duration"
+        },
+        "signals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/readSignalConfig"
+          }
+        },
+        "disable": {
+          "type": "boolean"
+        },
+        "can": {
+          "$ref": "#/definitions/canReadGroupConfig"
+        }
+      },
+      "additionalProperties": false
+    },
+    "writeTargetConfig": {
+      "type": "object",
+      "required": ["id", "cell", "endpoint", "function", "address"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "cell": {
+          "type": "string"
+        },
+        "endpoint": {
+          "$ref": "#/definitions/endpointConfig"
+        },
+        "function": {
+          "type": "string",
+          "enum": [
+            "coil",
+            "holding"
+          ]
+        },
+        "address": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scale": {
+          "type": "number"
+        },
+        "endianness": {
+          "type": "string",
+          "enum": ["big", "little", "mid-big", "mid-little"]
+        },
+        "signed": {
+          "type": "boolean"
+        },
+        "deadband": {
+          "type": "number"
+        },
+        "rate_limit": {
+          "$ref": "#/definitions/duration"
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "disable": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "programSignalConfig": {
+      "type": "object",
+      "required": ["id", "cell"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "cell": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/definitions/valueKind"
+        },
+        "optional": {
+          "type": "boolean"
+        },
+        "default": {}
+      },
+      "additionalProperties": false
+    },
+    "programConfig": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/programSignalConfig"
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/programSignalConfig"
+          }
+        },
+        "settings": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "metadata": {}
+      },
+      "additionalProperties": false
+    },
+    "dependencyConfig": {
+      "type": "object",
+      "required": ["cell", "type"],
+      "properties": {
+        "cell": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/definitions/valueKind"
+        },
+        "threshold": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    },
+    "logicBlockConfig": {
+      "type": "object",
+      "required": ["id", "target", "dependencies", "expression", "valid", "quality"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/dependencyConfig"
+          }
+        },
+        "expression": {
+          "type": "string"
+        },
+        "valid": {
+          "type": "string"
+        },
+        "quality": {
+          "type": "string"
+        },
+        "metadata": {}
+      },
+      "additionalProperties": false
+    },
+    "helperFunctionConfig": {
+      "type": "object",
+      "required": ["name", "arguments", "expression"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expression": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "dslConfig": {
+      "type": "object",
+      "properties": {
+        "helpers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/helperFunctionConfig"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "globalPolicies": {
+      "type": "object",
+      "properties": {
+        "retry_backoff": {
+          "$ref": "#/definitions/duration"
+        },
+        "retry_max": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "readback_verify": {
+          "type": "boolean"
+        },
+        "watchdog_cell": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "lokiConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "loggingConfig": {
+      "type": "object",
+      "required": ["level"],
+      "properties": {
+        "level": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["json", "text"]
+        },
+        "loki": {
+          "$ref": "#/definitions/lokiConfig"
+        }
+      },
+      "additionalProperties": false
+    },
+    "telemetryConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "workerSlots": {
+      "type": "object",
+      "properties": {
+        "read": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "program": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "execute": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "write": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "serverCellConfig": {
+      "type": "object",
+      "required": ["cell", "address"],
+      "properties": {
+        "cell": {
+          "type": "string"
+        },
+        "address": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scale": {
+          "type": "number"
+        },
+        "signed": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "serverConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "listen": {
+          "type": "string"
+        },
+        "unit_id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/serverCellConfig"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

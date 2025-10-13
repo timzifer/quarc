@@ -262,7 +262,90 @@ modules:
 	}
 }
 
+func TestDirectoryIncludeSkipsValuesFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	moduleDir := filepath.Join(dir, "modules")
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatalf("mkdir modules: %v", err)
+	}
+
+	modulePath := filepath.Join(moduleDir, "module.yaml")
+	if err := os.WriteFile(modulePath, []byte(`package: modules
+cells:
+  - id: included_cell
+    type: number
+`), 0o600); err != nil {
+		t.Fatalf("write module: %v", err)
+	}
+
+	valuesPath := filepath.Join(moduleDir, "secrets.values.yaml")
+	if err := os.WriteFile(valuesPath, []byte("secret: hunter2\n"), 0o600); err != nil {
+		t.Fatalf("write values: %v", err)
+	}
+
+	configPath := filepath.Join(dir, "config.yaml")
+	content := `package: root
+cycle: 1s
+cells: []
+reads: []
+writes: []
+logic: []
+values: []
+modules:
+  - modules
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if len(cfg.Cells) != 1 {
+		t.Fatalf("expected 1 cell from module, got %d", len(cfg.Cells))
+	}
+	if cfg.Cells[0].ID != "included_cell" {
+		t.Fatalf("unexpected cell id %q", cfg.Cells[0].ID)
+	}
+}
+
 func TestValuesSubstitution(t *testing.T) {
+	dir := t.TempDir()
+
+	valuesPath := filepath.Join(dir, "secrets.values.yaml")
+	if err := os.WriteFile(valuesPath, []byte("secret: hunter2\n"), 0o600); err != nil {
+		t.Fatalf("write values: %v", err)
+	}
+
+	configPath := filepath.Join(dir, "config.yaml")
+	content := `package: vault
+values:
+  - secrets.values.yaml
+cells:
+  - id: secret_value
+    type: string
+    constant: !secret
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.Cells) != 1 {
+		t.Fatalf("expected 1 cell, got %d", len(cfg.Cells))
+	}
+	if cfg.Cells[0].Constant != "hunter2" {
+		t.Fatalf("expected constant hunter2, got %#v", cfg.Cells[0].Constant)
+	}
+}
+
+func TestValuesFileMustUseSuffix(t *testing.T) {
 	dir := t.TempDir()
 
 	valuesPath := filepath.Join(dir, "secrets.yaml")
@@ -283,15 +366,8 @@ cells:
 		t.Fatalf("write config: %v", err)
 	}
 
-	cfg, err := Load(configPath)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if len(cfg.Cells) != 1 {
-		t.Fatalf("expected 1 cell, got %d", len(cfg.Cells))
-	}
-	if cfg.Cells[0].Constant != "hunter2" {
-		t.Fatalf("expected constant hunter2, got %#v", cfg.Cells[0].Constant)
+	if _, err := Load(configPath); err == nil {
+		t.Fatalf("expected error for invalid values file suffix")
 	}
 }
 
