@@ -43,7 +43,7 @@ Expression ASTs only execute when all declared dependencies exist and are valid.
 Configuration is provided as YAML (see [`config.example.yaml`](config.example.yaml)). Key sections:
 
 * `cycle` – Global cycle time.
-* `modules` – Optional list of additional YAML snippets to load (relative to the parent file). The loader also accepts directories, processing all `*.yaml`/`*.yml` files in lexical order, which makes `config.d`-style setups trivial.
+* `modules` – Optional list of additional YAML snippets to load (relative to the parent file). The loader also accepts directories, processing all `*.yaml`/`*.yml` files in lexical order, which makes `config.d`-style setups trivial. Files ending in `.values.yaml`/`.values.yml` are treated as value bundles and skipped automatically when a whole directory is imported.
 * `programs` – Reusable control modules with typed input/output bindings that execute between the read and logic phases.
 * `cells` – Definitions of all local memory cells.
 * `reads` – Modbus block reads (slave endpoint, function, address range, TTL and signal mapping into cells). A dedicated `can` driver ingests UDP/TCP byte streams from CAN↔Ethernet controllers and decodes frames according to an external DBC file.
@@ -119,7 +119,13 @@ Programs run before logic evaluation and write directly into the associated cell
 
 ### Splitting configuration files
 
-Use the `modules` directive to include additional YAML documents from the main configuration. Paths are resolved relative to the parent file, and may reference either files or directories. When a directory is supplied (for example `config.d`), every `.yaml` / `.yml` file is merged in lexical order, allowing you to organise large installations across multiple files without manual concatenation.
+Use the `modules` directive to include additional YAML documents from the main configuration. Paths are resolved relative to the parent file, and may reference either files or directories. When a directory is supplied (for example `config.d`), every `.yaml` / `.yml` file is merged in lexical order, allowing you to organise large installations across multiple files without manual concatenation. Files that end in `.values.yaml` / `.values.yml` are skipped automatically – they are only loaded when explicitly referenced from the `values` section.
+
+Values bundles referenced from `values:` **must** use the `.values.yaml` or `.values.yml` suffix so the loader can distinguish them from ordinary modules. Inline mappings remain supported for small pieces of data.
+
+### Schema validation
+
+Machine-readable JSON Schemas are available under [`config/config.schema.json`](config/config.schema.json) and [`config/values.schema.json`](config/values.schema.json). They can be used with editors or CI tooling to validate configuration fragments and value bundles. The configuration schema focuses on structural validation while keeping `additionalProperties` enabled so custom metadata blocks remain possible.
 
 ### Embedded Modbus server
 

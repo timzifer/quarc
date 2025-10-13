@@ -547,6 +547,9 @@ func loadDir(path string, visited map[string]struct{}, ctx moduleContext) (*modu
 			continue
 		}
 		name := entry.Name()
+		if isValuesFile(name) {
+			continue
+		}
 		ext := strings.ToLower(filepath.Ext(name))
 		if ext != ".yaml" && ext != ".yml" {
 			continue
@@ -786,7 +789,15 @@ func loadValuesIntoMap(root *yaml.Node, baseDir string, values map[string]*yaml.
 	return nil
 }
 
+func isValuesFile(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".values.yaml") || strings.HasSuffix(lower, ".values.yml")
+}
+
 func loadValueFile(path string) (map[string]*yaml.Node, error) {
+	if !isValuesFile(filepath.Base(path)) {
+		return nil, fmt.Errorf("values file %s must end with .values.yaml or .values.yml", path)
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
