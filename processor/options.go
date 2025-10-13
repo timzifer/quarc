@@ -8,8 +8,9 @@ import (
 	"github.com/timzifer/quarc/config"
 
 	"github.com/timzifer/quarc/programs"
+	readers "github.com/timzifer/quarc/runtime/readers"
+	writers "github.com/timzifer/quarc/runtime/writers"
 	"github.com/timzifer/quarc/service"
-	"github.com/timzifer/quarc/serviceio"
 	"github.com/timzifer/quarc/telemetry"
 )
 
@@ -36,13 +37,13 @@ func WithProgram(def ProgramDefinition) Option {
 	}
 }
 
-// WithIOService installs additional reader and writer factories for a driver.
-func WithIOService(def IOServiceDefinition) Option {
+// WithIODriver installs additional reader and writer factories for a driver.
+func WithIODriver(def IODriverDefinition) Option {
 	return func(cfg *settings) error {
 		if cfg == nil {
 			return nil
 		}
-		cfg.ioServices = append(cfg.ioServices, def)
+		cfg.ioDrivers = append(cfg.ioDrivers, def)
 		return nil
 	}
 }
@@ -117,7 +118,7 @@ func NewProgramDefinition(id string, factory programs.Factory) ProgramDefinition
 	return ProgramDefinition{ID: id, Factory: factory}
 }
 
-// NewIOServiceDefinition creates an IO service definition from the provided factories.
-func NewIOServiceDefinition(driver string, reader serviceio.ReaderFactory, writer serviceio.WriterFactory) IOServiceDefinition {
-	return IOServiceDefinition{Driver: driver, Reader: reader, Writer: writer}
+// NewIODriverDefinition creates an IO driver definition from the provided factories.
+func NewIODriverDefinition(driver string, reader readers.ReaderFactory, writer writers.WriterFactory) IODriverDefinition {
+	return IODriverDefinition{Driver: driver, Reader: reader, Writer: writer}
 }

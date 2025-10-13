@@ -31,7 +31,7 @@ func TestPrometheusCollectorRegistersAndReusesCounter(t *testing.T) {
 	require.Len(t, metrics, 1)
 
 	metric := metrics[0]
-	require.Equal(t, "modbus_processor_config_hot_reload_total", metric.GetName())
+	require.Equal(t, "quarc_config_hot_reload_total", metric.GetName())
 	requireCounterValue(t, metric, 1)
 
 	again, err := NewPrometheusCollector(reg)

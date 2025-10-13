@@ -20,10 +20,6 @@ Interfaces used by the scheduler now live under the `runtime` namespace:
 * `runtime/readers` – reader interfaces, status structures, and factories.
 * `runtime/writers` – writer interfaces, status structures, and factories.
 
-The legacy `serviceio` package still exports deprecated type aliases for
-backwards compatibility but will be removed in a future release. Update existing
-integrations to import the runtime packages directly.
-
 ### Runtime overrides
 
 Besides deterministic scheduling, the service exposes helper methods that make the controller easier to embed into a supervisory application:
@@ -52,6 +48,10 @@ svc, err := service.New(cfg, logger,
         service.WithWriterFactory("my-driver", myWriterFactory),
 )
 ```
+
+When constructing the processor directly, use `processor.WithIODriver` together
+with `processor.NewIODriverDefinition` to forward additional factories to the
+underlying service instance.
 
 Driver modules receive the raw `driver_settings` YAML node from the configuration (see below) so that protocol-specific options can be deserialised without polluting the core schema.
 
@@ -175,7 +175,7 @@ Trace level logging now provides detailed insights into each READ/PROGRAM/EVAL/C
    ```
 2. Start the processor with your configuration:
    ```bash
-   ./modbus_processor --config path/to/config.yaml
+   ./quarc --config path/to/config.yaml
    ```
 
    Use `--config-check` to produce a detailed logic validation report without starting the service, or `--healthcheck` to perform a lightweight configuration validation suitable for Docker health probes.
@@ -186,10 +186,10 @@ The service logs with [zerolog](https://github.com/rs/zerolog) and can optionall
 
 Releases tag the root module **and** the driver modules so that consumers can pin compatible versions. When creating a new version, create matching tags for:
 
-* `github.com/timzifer/modbus_processor`
-* `github.com/timzifer/modbus_processor/drivers/modbus`
-* `github.com/timzifer/modbus_processor/drivers/canstream`
-* `github.com/timzifer/modbus_processor/drivers/bundle`
+* `github.com/timzifer/quarc`
+* `github.com/timzifer/quarc/drivers/modbus`
+* `github.com/timzifer/quarc/drivers/canstream`
+* `github.com/timzifer/quarc/drivers/bundle`
 
 This ensures that downstream users embedding the drivers can resolve consistent module versions.
 

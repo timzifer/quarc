@@ -43,7 +43,7 @@ func NewPrometheusCollector(reg prometheus.Registerer) (*PrometheusCollector, er
 	defer hotReloadCounterLock.Unlock()
 	if hotReloadCounter == nil {
 		counter := prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "modbus_processor_config_hot_reload_total",
+			Name: "quarc_config_hot_reload_total",
 			Help: "Number of hot reload operations triggered per configuration source file.",
 		}, []string{"file"})
 		if err := reg.Register(counter); err != nil {

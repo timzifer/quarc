@@ -18,7 +18,8 @@ import (
 	"github.com/timzifer/quarc/internal/logging"
 	"github.com/timzifer/quarc/internal/reload"
 	"github.com/timzifer/quarc/programs"
-	"github.com/timzifer/quarc/serviceio"
+	readers "github.com/timzifer/quarc/runtime/readers"
+	writers "github.com/timzifer/quarc/runtime/writers"
 	"github.com/timzifer/quarc/telemetry"
 )
 
@@ -34,11 +35,11 @@ type ProgramDefinition struct {
 	Factory programs.Factory
 }
 
-// IOServiceDefinition bundles optional reader and writer factories under a driver identifier.
-type IOServiceDefinition struct {
+// IODriverDefinition bundles optional reader and writer factories under a driver identifier.
+type IODriverDefinition struct {
 	Driver string
-	Reader serviceio.ReaderFactory
-	Writer serviceio.WriterFactory
+	Reader readers.ReaderFactory
+	Writer writers.WriterFactory
 }
 
 type settings struct {
@@ -50,7 +51,7 @@ type settings struct {
 	telemetry         telemetry.Collector
 	telemetryProvided bool
 	programs          []ProgramDefinition
-	ioServices        []IOServiceDefinition
+	ioDrivers         []IODriverDefinition
 	serviceOptions    []service.Option
 	liveViewHost      string
 	liveViewPort      int
@@ -140,7 +141,7 @@ func New(ctx context.Context, opts ...Option) (*Processor, error) {
 		return nil, err
 	}
 
-	serviceOpts := buildServiceOptions(cfg.ioServices)
+	serviceOpts := buildServiceOptions(cfg.ioDrivers)
 	if len(cfg.serviceOptions) > 0 {
 		serviceOpts = append(serviceOpts, cfg.serviceOptions...)
 	}
@@ -486,7 +487,7 @@ func registerPrograms(defs []ProgramDefinition) error {
 	return nil
 }
 
-func buildServiceOptions(defs []IOServiceDefinition) []service.Option {
+func buildServiceOptions(defs []IODriverDefinition) []service.Option {
 	if len(defs) == 0 {
 		return nil
 	}
