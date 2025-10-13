@@ -26,6 +26,7 @@ reads:
     endpoint:
       address: "192.168.10.10:502"
       unit_id: 1
+      driver: modbus
     function: holding
     start: 0
     length: 1
@@ -42,6 +43,7 @@ writes:
     endpoint:
       address: "192.168.10.20:502"
       unit_id: 1
+      driver: modbus
     function: coil
     address: 5
     rate_limit: 2s

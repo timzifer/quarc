@@ -3,15 +3,19 @@ package service
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/timzifer/modbus_processor/config"
-	modbusdrv "github.com/timzifer/modbus_processor/drivers/modbus"
+	"github.com/timzifer/modbus_processor/runtime/readers"
+	"github.com/timzifer/modbus_processor/runtime/state"
+	"github.com/timzifer/modbus_processor/runtime/writers"
 )
 
 type fakeClient struct {
@@ -63,11 +67,213 @@ func (c *countingClient) Close() error {
 	return nil
 }
 
-func modbusOptions(factory modbusdrv.ClientFactory) []Option {
+const testDriverName = "stub"
+
+type testClient interface {
+	ReadHoldingRegisters(address, quantity uint16) ([]byte, error)
+	WriteSingleCoil(address, value uint16) ([]byte, error)
+	Close() error
+}
+
+type testClientFactory func(cfg config.EndpointConfig) (testClient, error)
+
+func stubOptions(factory testClientFactory) []Option {
 	return []Option{
-		WithReaderFactory("modbus", modbusdrv.NewReaderFactory(factory)),
-		WithWriterFactory("modbus", modbusdrv.NewWriterFactory(factory)),
+		WithReaderFactory(testDriverName, newStubReaderFactory(factory)),
+		WithWriterFactory(testDriverName, newStubWriterFactory(factory)),
 	}
+}
+
+func newStubReaderFactory(factory testClientFactory) readers.ReaderFactory {
+	return func(cfg config.ReadGroupConfig, deps readers.ReaderDependencies) (readers.ReadGroup, error) {
+		if factory == nil {
+			return nil, fmt.Errorf("read group %s: no client factory provided", cfg.ID)
+		}
+		if len(cfg.Signals) == 0 {
+			return nil, fmt.Errorf("read group %s: no signals configured", cfg.ID)
+		}
+		cellID := cfg.Signals[0].Cell
+		if cellID == "" {
+			return nil, fmt.Errorf("read group %s: signal missing cell", cfg.ID)
+		}
+		cell, err := deps.Cells.Get(cellID)
+		if err != nil {
+			return nil, err
+		}
+		client, err := factory(cfg.Endpoint)
+		if err != nil {
+			return nil, err
+		}
+		return &stubReadGroup{
+			id:       cfg.ID,
+			client:   client,
+			cell:     cell,
+			cellID:   cellID,
+			function: cfg.Function,
+			start:    cfg.Start,
+			length:   cfg.Length,
+			source:   cfg.Source,
+		}, nil
+	}
+}
+
+func newStubWriterFactory(factory testClientFactory) writers.WriterFactory {
+	return func(cfg config.WriteTargetConfig, deps writers.WriterDependencies) (writers.Writer, error) {
+		if factory == nil {
+			return nil, fmt.Errorf("write target %s: no client factory provided", cfg.ID)
+		}
+		if cfg.Cell == "" {
+			return nil, fmt.Errorf("write target %s: missing cell", cfg.ID)
+		}
+		cell, err := deps.Cells.Get(cfg.Cell)
+		if err != nil {
+			return nil, err
+		}
+		client, err := factory(cfg.Endpoint)
+		if err != nil {
+			return nil, err
+		}
+		return &stubWriter{
+			id:      cfg.ID,
+			client:  client,
+			cell:    cell,
+			cellID:  cfg.Cell,
+			address: cfg.Address,
+			source:  cfg.Source,
+		}, nil
+	}
+}
+
+type stubReadGroup struct {
+	id       string
+	client   testClient
+	cell     state.Cell
+	cellID   string
+	function string
+	start    uint16
+	length   uint16
+	source   config.ModuleReference
+
+	disabled     atomic.Bool
+	lastRun      time.Time
+	lastAttempt  time.Time
+	lastDuration time.Duration
+}
+
+func (g *stubReadGroup) ID() string { return g.id }
+
+func (g *stubReadGroup) Due(time.Time) bool {
+	return !g.disabled.Load()
+}
+
+func (g *stubReadGroup) Perform(now time.Time, logger zerolog.Logger) int {
+	if g.disabled.Load() {
+		return 0
+	}
+	g.lastAttempt = now
+	start := time.Now()
+	data, err := g.client.ReadHoldingRegisters(g.start, g.length)
+	g.lastDuration = time.Since(start)
+	if err != nil {
+		g.cell.MarkInvalid(now, "stub.read", err.Error())
+		logger.Error().Err(err).Str("group", g.id).Msg("stub read failed")
+		return 1
+	}
+	if len(data) < 2 {
+		g.cell.MarkInvalid(now, "stub.read", "insufficient data")
+		logger.Error().Str("group", g.id).Msg("stub read produced insufficient data")
+		return 1
+	}
+	value := binary.BigEndian.Uint16(data[:2])
+	if err := g.cell.SetValue(float64(value), now, nil); err != nil {
+		logger.Error().Err(err).Str("group", g.id).Msg("stub read set value failed")
+		return 1
+	}
+	g.lastRun = now
+	return 0
+}
+
+func (g *stubReadGroup) SetDisabled(disabled bool) {
+	g.disabled.Store(disabled)
+}
+
+func (g *stubReadGroup) Status() readers.ReadGroupStatus {
+	return readers.ReadGroupStatus{
+		ID:           g.id,
+		Function:     g.function,
+		Start:        g.start,
+		Length:       g.length,
+		Disabled:     g.disabled.Load(),
+		LastRun:      g.lastRun,
+		LastDuration: g.lastDuration,
+		Source:       g.source,
+	}
+}
+
+func (g *stubReadGroup) Close() {
+	_ = g.client.Close()
+}
+
+type stubWriter struct {
+	id      string
+	client  testClient
+	cell    state.Cell
+	cellID  string
+	address uint16
+	source  config.ModuleReference
+
+	disabled  atomic.Bool
+	lastValue bool
+	haveLast  bool
+}
+
+func (w *stubWriter) ID() string { return w.id }
+
+func (w *stubWriter) Commit(now time.Time, logger zerolog.Logger) int {
+	if w.disabled.Load() {
+		return 0
+	}
+	value, ok := w.cell.CurrentValue()
+	if !ok {
+		return 0
+	}
+	boolValue, ok := value.(bool)
+	if !ok {
+		logger.Error().Str("writer", w.id).Msg("stub writer expected bool value")
+		return 1
+	}
+	if w.haveLast && w.lastValue == boolValue {
+		return 0
+	}
+	raw := uint16(0)
+	if boolValue {
+		raw = 1
+	}
+	if _, err := w.client.WriteSingleCoil(w.address, raw); err != nil {
+		logger.Error().Err(err).Str("writer", w.id).Msg("stub writer failed")
+		return 1
+	}
+	w.lastValue = boolValue
+	w.haveLast = true
+	return 0
+}
+
+func (w *stubWriter) SetDisabled(disabled bool) {
+	w.disabled.Store(disabled)
+}
+
+func (w *stubWriter) Status() writers.WriteTargetStatus {
+	return writers.WriteTargetStatus{
+		ID:       w.id,
+		Cell:     w.cellID,
+		Address:  w.address,
+		Disabled: w.disabled.Load(),
+		Source:   w.source,
+	}
+}
+
+func (w *stubWriter) Close() {
+	_ = w.client.Close()
 }
 
 func TestDeterministicCycle(t *testing.T) {
@@ -80,7 +286,7 @@ func TestDeterministicCycle(t *testing.T) {
 		return nil, nil
 	}
 
-	factory := func(config.EndpointConfig) (modbusdrv.Client, error) {
+	factory := func(config.EndpointConfig) (testClient, error) {
 		return client, nil
 	}
 
@@ -94,7 +300,7 @@ func TestDeterministicCycle(t *testing.T) {
 		Reads: []config.ReadGroupConfig{
 			{
 				ID:       "temperature",
-				Endpoint: config.EndpointConfig{Address: "ignored:502", UnitID: 1},
+				Endpoint: config.EndpointConfig{Address: "ignored:502", UnitID: 1, Driver: testDriverName},
 				Function: "holding",
 				Start:    0,
 				Length:   1,
@@ -126,7 +332,7 @@ func TestDeterministicCycle(t *testing.T) {
 			{
 				ID:       "write_alarm",
 				Cell:     "alarm",
-				Endpoint: config.EndpointConfig{Address: "ignored:502", UnitID: 1},
+				Endpoint: config.EndpointConfig{Address: "ignored:502", UnitID: 1, Driver: testDriverName},
 				Function: "coil",
 				Address:  10,
 			},
@@ -134,7 +340,7 @@ func TestDeterministicCycle(t *testing.T) {
 	}
 
 	logger := zerolog.New(io.Discard)
-	svc, err := New(cfg, logger, modbusOptions(factory)...)
+	svc, err := New(cfg, logger, stubOptions(factory)...)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
@@ -519,7 +725,7 @@ func TestServiceClosesRemoteClients(t *testing.T) {
 		},
 		Reads: []config.ReadGroupConfig{{
 			ID:       "rg",
-			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1},
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
 			Function: "holding",
 			Start:    0,
 			Length:   1,
@@ -537,14 +743,14 @@ func TestServiceClosesRemoteClients(t *testing.T) {
 		Writes: []config.WriteTargetConfig{{
 			ID:       "wt",
 			Cell:     "output",
-			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1},
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
 			Function: "coil",
 			Address:  0,
 		}},
 	}
 
 	clients := make([]*countingClient, 0, 2)
-	factory := func(config.EndpointConfig) (modbusdrv.Client, error) {
+	factory := func(config.EndpointConfig) (testClient, error) {
 		client := &countingClient{}
 		client.readHoldingFn = func(address, quantity uint16) ([]byte, error) {
 			return []byte{0x00, 0x01}, nil
@@ -557,7 +763,7 @@ func TestServiceClosesRemoteClients(t *testing.T) {
 	}
 
 	logger := zerolog.New(io.Discard)
-	svc, err := New(cfg, logger, modbusOptions(factory)...)
+	svc, err := New(cfg, logger, stubOptions(factory)...)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}

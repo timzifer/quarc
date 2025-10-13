@@ -36,7 +36,7 @@ These helpers allow HMIs to implement “force” functionality or provide manua
 
 ## Drivers
 
-Protocol implementations are packaged as standalone Go modules under the [`drivers/`](drivers) directory. The core service does not link against Modbus or CAN dependencies by default – applications register the drivers they need via `service.WithReaderFactory` / `service.WithWriterFactory` options when constructing a `service.Service` instance.
+Protocol implementations are packaged as standalone Go modules under the [`drivers/`](drivers) directory. The core service does not link against Modbus or CAN dependencies by default – applications register the drivers they need via `service.WithReaderFactory` / `service.WithWriterFactory` options when constructing a `service.Service` instance. Every endpoint must declare the driver it expects so the service can select the matching factories.
 
 For convenience the [`drivers/bundle`](drivers/bundle) module exposes helper functions that install the built-in drivers:
 
