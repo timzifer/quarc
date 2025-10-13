@@ -1,4 +1,4 @@
-# Modbus Processor
+# QUARC (Quadriphasic Automation Runtime Controller)
 
 A deterministic, cyclic Modbus controller that executes four strictly separated phases – **READ**, **PROGRAM**, **EVAL** and **COMMIT** – on a fixed schedule. The controller ingests Modbus registers in blocks, stores them in typed in-memory cells, lets reusable control programs derive new signals, evaluates expression-based logic with optional validation expressions and finally commits changes back to Modbus targets using a write-on-change strategy.
 
