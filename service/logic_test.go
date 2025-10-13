@@ -33,7 +33,7 @@ func TestPrepareLogicBlockAutoDependencies(t *testing.T) {
 		Quality:    "valid(\"a\") && valid(\"b\") ? 0.75 : 0",
 	}
 
-	block, meta, err := prepareLogicBlock(cfg, cells, dsl, 0)
+	block, meta, err := prepareLogicBlock(cfg, cells, dsl, 0, nil)
 	if err != nil {
 		t.Fatalf("prepareLogicBlock: %v", err)
 	}
@@ -87,7 +87,7 @@ flow_sensor_current - (0.8 * 1) + 0.8
 		Expression: expression,
 	}
 
-	block, _, err := prepareLogicBlock(cfg, cells, dsl, 0)
+	block, _, err := prepareLogicBlock(cfg, cells, dsl, 0, nil)
 	if err != nil {
 		t.Fatalf("prepareLogicBlock: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestPrepareLogicBlockMissingValidateDependency(t *testing.T) {
 		Valid:      "cell(\"missing\")",
 	}
 
-	_, _, err = prepareLogicBlock(cfg, cells, dsl, 0)
+	_, _, err = prepareLogicBlock(cfg, cells, dsl, 0, nil)
 	if err == nil {
 		t.Fatalf("expected error for missing validate dependency")
 	}
@@ -155,7 +155,7 @@ func TestHelperFunctionUsage(t *testing.T) {
 		Quality:    "valid(\"temperature\") ? 0.9 : 0",
 	}
 
-	block, _, err := prepareLogicBlock(cfg, cells, dsl, 0)
+	block, _, err := prepareLogicBlock(cfg, cells, dsl, 0, nil)
 	if err != nil {
 		t.Fatalf("prepareLogicBlock: %v", err)
 	}
@@ -328,7 +328,7 @@ func TestValidationExpressionValueFunctionAlias(t *testing.T) {
 		Valid:      `let t = value("input"); t > 0`,
 	}
 
-	block, _, err := prepareLogicBlock(cfg, cells, dsl, 0)
+	block, _, err := prepareLogicBlock(cfg, cells, dsl, 0, nil)
 	if err != nil {
 		t.Fatalf("prepareLogicBlock: %v", err)
 	}

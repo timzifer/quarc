@@ -98,7 +98,7 @@ func AnalyzeLogic(cfg *config.Config) (*LogicAnalysis, error) {
 			Source:     blockCfg.Source,
 		}
 
-		block, meta, buildErr := prepareLogicBlock(blockCfg, cells, dsl, idx)
+		block, meta, buildErr := prepareLogicBlock(blockCfg, cells, dsl, idx, nil)
 		if block != nil && block.target != nil {
 			report.TargetType = block.target.cfg.Type
 		}

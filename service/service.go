@@ -36,8 +36,11 @@ type Service struct {
 
 	controller *cycleController
 	cycle      atomic.Int64
+	cycleIndex atomic.Uint64
 	liveView   *liveViewServer
 	load       systemLoad
+	heatmap    heatmapSettings
+	activity   *activityTracker
 }
 
 type metrics struct {
@@ -225,22 +228,44 @@ func New(cfg *config.Config, logger zerolog.Logger, opts ...Option) (*Service, e
 	if err != nil {
 		return nil, err
 	}
-	reads, err := buildReadGroups(cfg.Reads, readers.ReaderDependencies{Cells: cells}, registry.readers)
+	slots := newWorkerSlots(cfg.Workers)
+	svc := &Service{
+		cfg:       cfg,
+		logger:    logger,
+		cells:     cells,
+		snapshots: newSnapshotSwitch(len(cfg.Cells)),
+		workers:   slots,
+	}
+	svc.load = newSystemLoad(slots)
+	svc.controller = newCycleController(cfg.CycleInterval())
+	svc.cycle.Store(int64(cfg.CycleInterval()))
+	svc.heatmap = newHeatmapSettings(cfg.LiveView.Heatmap)
+	svc.activity = newActivityTracker(&svc.cycleIndex, svc.heatmap)
+
+	reads, err := buildReadGroups(cfg.Reads, readers.ReaderDependencies{Cells: cells, Activity: svc.activity}, registry.readers)
 	if err != nil {
 		return nil, err
 	}
-	logic, ordered, err := newLogicBlocks(cfg.Logic, cells, dsl, logger)
+	svc.reads = reads
+
+	logic, ordered, err := newLogicBlocks(cfg.Logic, cells, dsl, logger, svc.activity)
 	if err != nil {
 		return nil, err
 	}
-	programs, err := newProgramBindings(cfg.Programs, cells, logger)
+	svc.logic = logic
+	svc.ordered = ordered
+
+	programs, err := newProgramBindings(cfg.Programs, cells, logger, svc.activity)
 	if err != nil {
 		return nil, err
 	}
+	svc.programs = programs
+
 	writes, err := buildWriteTargets(cfg.Writes, writers.WriterDependencies{Cells: cells}, registry.writers)
 	if err != nil {
 		return nil, err
 	}
+	svc.writes = writes
 	var srv *modbusServer
 	if cfg.Server.Enabled {
 		serverLogger := logger.With().Str("component", "modbus_server").Logger()
@@ -249,26 +274,7 @@ func New(cfg *config.Config, logger zerolog.Logger, opts ...Option) (*Service, e
 			return nil, err
 		}
 	}
-
-	slots := newWorkerSlots(cfg.Workers)
-	svc := &Service{
-		cfg:       cfg,
-		logger:    logger,
-		cells:     cells,
-		snapshots: newSnapshotSwitch(len(cfg.Cells)),
-		reads:     reads,
-		logic:     logic,
-		ordered:   ordered,
-		writes:    writes,
-		server:    srv,
-		workers:   slots,
-	}
-	svc.load = newSystemLoad(slots)
-	svc.controller = newCycleController(cfg.CycleInterval())
-	svc.cycle.Store(int64(cfg.CycleInterval()))
-	if len(programs) > 0 {
-		svc.programs = programs
-	}
+	svc.server = srv
 	return svc, nil
 }
 
@@ -337,10 +343,10 @@ func Validate(cfg *config.Config, logger zerolog.Logger, opts ...Option) error {
 	if _, err := buildReadGroups(cfg.Reads, readers.ReaderDependencies{Cells: cells}, registry.readers); err != nil {
 		return err
 	}
-	if _, _, err := newLogicBlocks(cfg.Logic, cells, dsl, logger); err != nil {
+	if _, _, err := newLogicBlocks(cfg.Logic, cells, dsl, logger, nil); err != nil {
 		return err
 	}
-	if _, err := newProgramBindings(cfg.Programs, cells, logger); err != nil {
+	if _, err := newProgramBindings(cfg.Programs, cells, logger, nil); err != nil {
 		return err
 	}
 	if _, err := buildWriteTargets(cfg.Writes, writers.WriterDependencies{Cells: cells}, registry.writers); err != nil {
@@ -373,6 +379,7 @@ func (s *Service) Run(ctx context.Context) error {
 // IterateOnce performs a single deterministic cycle.
 func (s *Service) IterateOnce(ctx context.Context, now time.Time) error {
 	start := time.Now()
+	s.cycleIndex.Add(1)
 	readErrors := s.readPhase(now)
 	var readSnapshot map[string]*snapshotValue
 	if s.snapshots != nil {
@@ -559,7 +566,15 @@ func (s *Service) UpdateCell(id string, value interface{}, hasValue bool, qualit
 		}
 	}
 	update := manualCellUpdate{value: value, hasValue: hasValue, quality: quality, qualitySet: qualitySet, valid: valid}
-	return s.cells.updateManual(id, time.Now(), update)
+	ts := time.Now()
+	state, err := s.cells.updateManual(id, ts, update)
+	if err != nil {
+		return CellState{}, err
+	}
+	if s.activity != nil {
+		s.activity.RecordCellWrite(id, "manual", "manual", ts)
+	}
+	return state, nil
 }
 
 // SetReadGroupDisabled toggles a read group at runtime.
@@ -609,6 +624,30 @@ func (s *Service) LogicStates() []logicBlockState {
 	states := make([]logicBlockState, 0, len(s.logic))
 	for _, block := range s.logic {
 		states = append(states, logicBlockState{ID: block.cfg.ID, Target: block.cfg.Target, Metrics: block.metricsSnapshot(), Source: block.cfg.Source})
+	}
+	sort.Slice(states, func(i, j int) bool { return states[i].ID < states[j].ID })
+	return states
+}
+
+// ProgramStates returns a snapshot of configured programs and their bindings.
+func (s *Service) ProgramStates() []programState {
+	if len(s.programs) == 0 {
+		return nil
+	}
+	states := make([]programState, 0, len(s.programs))
+	for _, binding := range s.programs {
+		outputs := make([]string, 0, len(binding.outputs))
+		for _, out := range binding.outputs {
+			if out.cell != nil {
+				outputs = append(outputs, out.cell.cfg.ID)
+			}
+		}
+		states = append(states, programState{
+			ID:      binding.cfg.ID,
+			Type:    binding.cfg.Type,
+			Outputs: outputs,
+			Source:  binding.cfg.Source,
+		})
 	}
 	sort.Slice(states, func(i, j int) bool { return states[i].ID < states[j].ID })
 	return states

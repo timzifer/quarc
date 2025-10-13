@@ -31,9 +31,10 @@ type programBinding struct {
 	program programs.Program
 	inputs  []programInputBinding
 	outputs []programOutputBinding
+	tracker *activityTracker
 }
 
-func newProgramBindings(cfgs []config.ProgramConfig, cells *cellStore, logger zerolog.Logger) ([]*programBinding, error) {
+func newProgramBindings(cfgs []config.ProgramConfig, cells *cellStore, logger zerolog.Logger, tracker *activityTracker) ([]*programBinding, error) {
 	bindings := make([]*programBinding, 0, len(cfgs))
 	seen := make(map[string]struct{})
 	occupiedCells := make(map[string]string)
@@ -53,7 +54,7 @@ func newProgramBindings(cfgs []config.ProgramConfig, cells *cellStore, logger ze
 		if err != nil {
 			return nil, fmt.Errorf("program %s: %w", cfg.ID, err)
 		}
-		binding := &programBinding{cfg: cfg, program: instance}
+		binding := &programBinding{cfg: cfg, program: instance, tracker: tracker}
 		usedCells := make(map[string]struct{})
 
 		for _, inCfg := range cfg.Inputs {
@@ -159,14 +160,17 @@ func (b *programBinding) applyOutputs(outputs []programs.Signal, now time.Time) 
 		sig, ok := produced[binding.id]
 		if !ok || !sig.Valid {
 			binding.cell.markInvalid(now, "program_output_invalid", fmt.Sprintf("program %s missing signal %s", b.cfg.ID, binding.id))
+			b.recordCellWrite(binding.cell, now, "program_invalid")
 			errors++
 			continue
 		}
 		if err := binding.cell.setValue(sig.Value, now, nil); err != nil {
 			binding.cell.markInvalid(now, "program_output_error", fmt.Sprintf("program %s: %v", b.cfg.ID, err))
+			b.recordCellWrite(binding.cell, now, "program_invalid")
 			errors++
 			continue
 		}
+		b.recordCellWrite(binding.cell, now, "program")
 	}
 	return errors
 }
@@ -175,7 +179,15 @@ func (b *programBinding) invalidateOutputs(now time.Time, err error) {
 	message := err.Error()
 	for _, binding := range b.outputs {
 		binding.cell.markInvalid(now, "program_error", fmt.Sprintf("program %s: %s", b.cfg.ID, message))
+		b.recordCellWrite(binding.cell, now, "program_invalid")
 	}
+}
+
+func (b *programBinding) recordCellWrite(target *cell, ts time.Time, kind string) {
+	if b == nil || b.tracker == nil || target == nil {
+		return
+	}
+	b.tracker.RecordCellWrite(target.cfg.ID, b.cfg.ID, kind, ts)
 }
 
 func (s *Service) delta(now time.Time) time.Duration {
@@ -201,15 +213,22 @@ func (s *Service) programPhase(now time.Time, snapshot map[string]*snapshotValue
 		if err != nil {
 			s.logger.Error().Str("program", binding.cfg.ID).Err(err).Msg("program execution failed")
 			binding.invalidateOutputs(now, err)
+			if binding.tracker != nil {
+				binding.tracker.RecordProgram(binding.cfg.ID, now, false)
+			}
 			return 1
 		}
-		return binding.applyOutputs(outputs, now)
+		applyErrors := binding.applyOutputs(outputs, now)
+		if binding.tracker != nil {
+			binding.tracker.RecordProgram(binding.cfg.ID, now, applyErrors == 0)
+		}
+		return applyErrors
 	})
 	return errors
 }
 
 func (s *Service) registerPrograms(cfgs []config.ProgramConfig) error {
-	programs, err := newProgramBindings(cfgs, s.cells, s.logger)
+	programs, err := newProgramBindings(cfgs, s.cells, s.logger, s.activity)
 	if err != nil {
 		return err
 	}

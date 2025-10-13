@@ -74,6 +74,9 @@
     "logging": {
       "$ref": "#/definitions/loggingConfig"
     },
+    "live_view": {
+      "$ref": "#/definitions/liveViewConfig"
+    },
     "telemetry": {
       "$ref": "#/definitions/telemetryConfig"
     },
@@ -669,3 +672,40 @@
     }
   }
 }
+    "heatmapColorConfig": {
+      "type": "object",
+      "properties": {
+        "background": { "type": "string" },
+        "border": { "type": "string" },
+        "logic": { "type": "string" },
+        "program": { "type": "string" },
+        "read": { "type": "string" },
+        "stale": { "type": "string" },
+        "write": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "heatmapCooldownConfig": {
+      "type": "object",
+      "properties": {
+        "cells": { "type": "integer", "minimum": 0 },
+        "logic": { "type": "integer", "minimum": 0 },
+        "programs": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "heatmapConfig": {
+      "type": "object",
+      "properties": {
+        "colors": { "$ref": "#/definitions/heatmapColorConfig" },
+        "cooldown": { "$ref": "#/definitions/heatmapCooldownConfig" }
+      },
+      "additionalProperties": false
+    },
+    "liveViewConfig": {
+      "type": "object",
+      "properties": {
+        "heatmap": { "$ref": "#/definitions/heatmapConfig" }
+      },
+      "additionalProperties": false
+    },

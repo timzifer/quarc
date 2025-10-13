@@ -6,6 +6,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/timzifer/modbus_processor/config"
+	"github.com/timzifer/modbus_processor/runtime/activity"
 	"github.com/timzifer/modbus_processor/runtime/state"
 )
 
@@ -37,7 +38,8 @@ type ReadGroupStatus struct {
 }
 
 type ReaderDependencies struct {
-	Cells state.CellStore
+	Cells    state.CellStore
+	Activity activity.Tracker
 }
 
 // ReaderFactory constructs a ReadGroup using the provided configuration and
