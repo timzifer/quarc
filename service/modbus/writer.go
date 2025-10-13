@@ -13,12 +13,13 @@ import (
 	"github.com/timzifer/modbus_processor/config"
 
 	"github.com/timzifer/modbus_processor/remote"
-	serviceio "github.com/timzifer/modbus_processor/serviceio"
+	"github.com/timzifer/modbus_processor/runtime/state"
+	runtimeWriters "github.com/timzifer/modbus_processor/runtime/writers"
 )
 
 type writeTarget struct {
 	cfg           config.WriteTargetConfig
-	cell          serviceio.Cell
+	cell          state.Cell
 	clientFactory remote.ClientFactory
 	client        remote.Client
 	lastValue     interface{}
@@ -30,16 +31,16 @@ type writeTarget struct {
 }
 
 // NewWriterFactory builds a Modbus write target factory.
-func NewWriterFactory(factory remote.ClientFactory) serviceio.WriterFactory {
+func NewWriterFactory(factory remote.ClientFactory) runtimeWriters.WriterFactory {
 	if factory == nil {
 		factory = remote.NewTCPClientFactory()
 	}
-	return func(cfg config.WriteTargetConfig, deps serviceio.WriterDependencies) (serviceio.Writer, error) {
+	return func(cfg config.WriteTargetConfig, deps runtimeWriters.WriterDependencies) (runtimeWriters.Writer, error) {
 		return newWriteTarget(cfg, deps, factory)
 	}
 }
 
-func newWriteTarget(cfg config.WriteTargetConfig, deps serviceio.WriterDependencies, factory remote.ClientFactory) (serviceio.Writer, error) {
+func newWriteTarget(cfg config.WriteTargetConfig, deps runtimeWriters.WriterDependencies, factory remote.ClientFactory) (runtimeWriters.Writer, error) {
 	if deps.Cells == nil {
 		return nil, fmt.Errorf("write target %s: missing cell store", cfg.ID)
 	}
@@ -276,13 +277,13 @@ func (t *writeTarget) SetDisabled(disabled bool) {
 	}
 }
 
-func (t *writeTarget) Status() serviceio.WriteTargetStatus {
+func (t *writeTarget) Status() runtimeWriters.WriteTargetStatus {
 	t.mu.RLock()
 	lastWrite := t.lastWrite
 	lastAttempt := t.lastAttempt
 	lastDuration := t.lastDuration
 	t.mu.RUnlock()
-	return serviceio.WriteTargetStatus{
+	return runtimeWriters.WriteTargetStatus{
 		ID:           t.cfg.ID,
 		Cell:         t.cfg.Cell,
 		Function:     t.cfg.Function,

@@ -10,8 +10,7 @@ import (
 
 	"github.com/shopspring/decimal"
 	"github.com/timzifer/modbus_processor/config"
-
-	serviceio "github.com/timzifer/modbus_processor/serviceio"
+	"github.com/timzifer/modbus_processor/runtime/state"
 )
 
 type diagnosis struct {
@@ -107,7 +106,7 @@ func (s *cellStore) mustGet(id string) (*cell, error) {
 	return c, nil
 }
 
-func (s *cellStore) Get(id string) (serviceio.Cell, error) {
+func (s *cellStore) Get(id string) (state.Cell, error) {
 	return s.mustGet(id)
 }
 

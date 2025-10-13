@@ -16,8 +16,8 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/timzifer/modbus_processor/config"
-
-	serviceio "github.com/timzifer/modbus_processor/serviceio"
+	runtimeReaders "github.com/timzifer/modbus_processor/runtime/readers"
+	"github.com/timzifer/modbus_processor/runtime/state"
 
 	"go.einride.tech/can/pkg/dbc"
 )
@@ -38,7 +38,7 @@ type frame struct {
 
 type signalBinding struct {
 	signal     *dbc.SignalDef
-	cell       serviceio.Cell
+	cell       state.Cell
 	cellConfig config.CellConfig
 	factor     float64
 	offset     float64
@@ -59,7 +59,7 @@ type readGroup struct {
 	conn         net.Conn
 	buffer       []byte
 	bindings     map[frameKey][]frameBinding
-	allCells     []serviceio.Cell
+	allCells     []state.Cell
 	readTimeout  time.Duration
 	bufferSize   int
 	lastRun      time.Time
@@ -67,13 +67,13 @@ type readGroup struct {
 }
 
 // NewReaderFactory creates a CAN stream reader factory.
-func NewReaderFactory() serviceio.ReaderFactory {
-	return func(cfg config.ReadGroupConfig, deps serviceio.ReaderDependencies) (serviceio.ReadGroup, error) {
+func NewReaderFactory() runtimeReaders.ReaderFactory {
+	return func(cfg config.ReadGroupConfig, deps runtimeReaders.ReaderDependencies) (runtimeReaders.ReadGroup, error) {
 		return newReadGroup(cfg, deps)
 	}
 }
 
-func newReadGroup(cfg config.ReadGroupConfig, deps serviceio.ReaderDependencies) (serviceio.ReadGroup, error) {
+func newReadGroup(cfg config.ReadGroupConfig, deps runtimeReaders.ReaderDependencies) (runtimeReaders.ReadGroup, error) {
 	if cfg.ID == "" {
 		return nil, fmt.Errorf("read group id must not be empty")
 	}
@@ -106,7 +106,7 @@ func newReadGroup(cfg config.ReadGroupConfig, deps serviceio.ReaderDependencies)
 	}
 
 	bindings := make(map[frameKey][]frameBinding)
-	cellSet := make(map[string]serviceio.Cell)
+	cellSet := make(map[string]state.Cell)
 	for _, frameCfg := range canCfg.Frames {
 		msgDef, key, err := resolveMessage(frameCfg, messages)
 		if err != nil {
@@ -153,7 +153,7 @@ func newReadGroup(cfg config.ReadGroupConfig, deps serviceio.ReaderDependencies)
 		bindings[key] = append(bindings[key], frameBind)
 	}
 
-	allCells := make([]serviceio.Cell, 0, len(cellSet))
+	allCells := make([]state.Cell, 0, len(cellSet))
 	for _, cell := range cellSet {
 		allCells = append(allCells, cell)
 	}
@@ -366,10 +366,10 @@ func (g *readGroup) SetDisabled(disabled bool) {
 	}
 }
 
-func (g *readGroup) Status() serviceio.ReadGroupStatus {
+func (g *readGroup) Status() runtimeReaders.ReadGroupStatus {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return serviceio.ReadGroupStatus{
+	return runtimeReaders.ReadGroupStatus{
 		ID:           g.cfg.ID,
 		Function:     "can",
 		Disabled:     g.disabled.Load(),
