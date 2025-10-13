@@ -34,6 +34,27 @@ Besides deterministic scheduling, the service exposes helper methods that make t
 
 These helpers allow HMIs to implement “force” functionality or provide manual fallback values during commissioning, mirroring typical features of a soft PLC.
 
+## Drivers
+
+Protocol implementations are packaged as standalone Go modules under the [`drivers/`](drivers) directory. The core service does not link against Modbus or CAN dependencies by default – applications register the drivers they need via `service.WithReaderFactory` / `service.WithWriterFactory` options when constructing a `service.Service` instance.
+
+For convenience the [`drivers/bundle`](drivers/bundle) module exposes helper functions that install the built-in drivers:
+
+```go
+svc, err := service.New(cfg, logger, bundle.Options(modbus.NewTCPClientFactory())...)
+```
+
+Custom drivers can be registered by providing factories for a new driver identifier:
+
+```go
+svc, err := service.New(cfg, logger,
+        service.WithReaderFactory("my-driver", myReaderFactory),
+        service.WithWriterFactory("my-driver", myWriterFactory),
+)
+```
+
+Driver modules receive the raw `driver_settings` YAML node from the configuration (see below) so that protocol-specific options can be deserialised without polluting the core schema.
+
 ## Expression DSL
 
 Expressions are compiled with [`expr`](https://github.com/expr-lang/expr). The following helpers are available:
@@ -58,9 +79,9 @@ Configuration is provided as YAML (see [`config.example.yaml`](config.example.ya
 * `modules` – Optional list of additional YAML snippets to load (relative to the parent file). The loader also accepts directories, processing all `*.yaml`/`*.yml` files in lexical order, which makes `config.d`-style setups trivial. Files ending in `.values.yaml`/`.values.yml` are treated as value bundles and skipped automatically when a whole directory is imported.
 * `programs` – Reusable control modules with typed input/output bindings that execute between the read and logic phases.
 * `cells` – Definitions of all local memory cells.
-* `reads` – Modbus block reads (slave endpoint, function, address range, TTL and signal mapping into cells). A dedicated `can` driver ingests UDP/TCP byte streams from CAN↔Ethernet controllers and decodes frames according to an external DBC file.
+* `reads` – Block reads referencing a `driver` via the endpoint. Modbus readers still support the legacy top-level fields, while additional driver-specific options can be supplied via `driver_settings`. The bundled `can` driver ingests UDP/TCP byte streams from CAN↔Ethernet controllers and decodes frames according to an external DBC file.
 * `logic` – Logic blocks with an expression AST, optional `valid`/`quality` expressions and a target cell. Dependencies are automatically discovered from all expressions.
-* `writes` – Modbus write targets with deadband, rate limit and priority options.
+* `writes` – Write targets referencing a driver identifier. Modbus targets support the existing fields and optional overrides inside `driver_settings`.
 * `logging` / `policies` – Runtime logging setup and optional global policies (retry behaviour, watchdog, readback, etc.). `logging.format` controls the stdout renderer (`json` by default, `text` for human friendly console output).
 * `server` – Configuration for the embedded Modbus/TCP server that exposes cells as input registers.
 
@@ -92,6 +113,7 @@ reads:
     endpoint:
       address: "192.168.10.10:502"
       unit_id: 1
+      driver: modbus
     function: holding
     start: 0
     length: 1
@@ -106,7 +128,7 @@ reads:
       address: "192.168.10.50:20108"
       driver: can
     ttl: 0s
-    can:
+    driver_settings:
       protocol: udp
       dbc: configs/drivetrain.dbc
       frames:
@@ -159,6 +181,17 @@ Trace level logging now provides detailed insights into each READ/PROGRAM/EVAL/C
    Use `--config-check` to produce a detailed logic validation report without starting the service, or `--healthcheck` to perform a lightweight configuration validation suitable for Docker health probes.
 
 The service logs with [zerolog](https://github.com/rs/zerolog) and can optionally stream logs to Loki when configured.
+
+## Release process
+
+Releases tag the root module **and** the driver modules so that consumers can pin compatible versions. When creating a new version, create matching tags for:
+
+* `github.com/timzifer/modbus_processor`
+* `github.com/timzifer/modbus_processor/drivers/modbus`
+* `github.com/timzifer/modbus_processor/drivers/canstream`
+* `github.com/timzifer/modbus_processor/drivers/bundle`
+
+This ensures that downstream users embedding the drivers can resolve consistent module versions.
 
 ## Testing
 

@@ -80,9 +80,9 @@ func newReadGroup(cfg config.ReadGroupConfig, deps runtimeReaders.ReaderDependen
 	if deps.Cells == nil {
 		return nil, fmt.Errorf("read group %s: missing cell store", cfg.ID)
 	}
-	canCfg := cfg.CAN
-	if canCfg == nil {
-		return nil, fmt.Errorf("read group %s: missing CAN configuration", cfg.ID)
+	canCfg, err := resolveCANConfig(cfg)
+	if err != nil {
+		return nil, err
 	}
 	if len(canCfg.Frames) == 0 {
 		return nil, fmt.Errorf("read group %s: no CAN frames configured", cfg.ID)

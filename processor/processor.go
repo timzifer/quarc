@@ -51,6 +51,7 @@ type settings struct {
 	telemetryProvided bool
 	programs          []ProgramDefinition
 	ioServices        []IOServiceDefinition
+	serviceOptions    []service.Option
 	liveViewHost      string
 	liveViewPort      int
 	enableLiveView    bool
@@ -139,11 +140,16 @@ func New(ctx context.Context, opts ...Option) (*Processor, error) {
 		return nil, err
 	}
 
+	serviceOpts := buildServiceOptions(cfg.ioServices)
+	if len(cfg.serviceOptions) > 0 {
+		serviceOpts = append(serviceOpts, cfg.serviceOptions...)
+	}
+
 	proc := &Processor{
 		config:          cfg.config,
 		configPath:      cfg.configPath,
 		collector:       cfg.telemetry,
-		serviceOptions:  buildServiceOptions(cfg.ioServices),
+		serviceOptions:  serviceOpts,
 		customLogger:    cfg.customLogger,
 		baseLogger:      cfg.logger,
 		liveViewEnabled: cfg.enableLiveView,
@@ -409,7 +415,7 @@ func (p *Processor) buildRuntime(cfg *config.Config) (*runtimeState, error) {
 	}
 	log.Logger = runtime.logger
 
-	srv, err := service.New(cfg, runtime.logger, nil, p.serviceOptions...)
+	srv, err := service.New(cfg, runtime.logger, p.serviceOptions...)
 	if err != nil {
 		runtime.cleanup()
 		return nil, err

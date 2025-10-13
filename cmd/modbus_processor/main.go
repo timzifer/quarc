@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/timzifer/modbus_processor/config"
+	driversbundle "github.com/timzifer/modbus_processor/drivers/bundle"
 	service2 "github.com/timzifer/modbus_processor/service"
 
 	"github.com/timzifer/modbus_processor/processor"
@@ -52,6 +53,7 @@ func main() {
 	options := []processor.Option{
 		processor.WithConfig(cfg),
 		processor.WithConfigPath(*cfgPath, func(fn processor.ReloadFunc) { reloadFn = fn }),
+		processor.WithServiceOptions(driversbundle.Options(nil)...),
 	}
 
 	if *liveView {
