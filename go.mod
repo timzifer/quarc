@@ -11,15 +11,8 @@ require (
 	github.com/rs/zerolog v1.34.0
 	github.com/shopspring/decimal v1.4.0
 	github.com/stretchr/testify v1.8.4
-	github.com/timzifer/modbus_processor/drivers/bundle v0.0.0
 	gopkg.in/yaml.v3 v3.0.1
 )
-
-replace github.com/timzifer/modbus_processor/drivers/bundle => ./drivers/bundle
-
-replace github.com/timzifer/modbus_processor/drivers/canstream => ./drivers/canstream
-
-replace github.com/timzifer/modbus_processor/drivers/modbus => ./drivers/modbus
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -29,8 +22,6 @@ require (
 	github.com/go-kit/kit v0.10.0 // indirect
 	github.com/go-kit/log v0.2.1 // indirect
 	github.com/go-logfmt/logfmt v0.5.1 // indirect
-	github.com/goburrow/modbus v0.1.0 // indirect
-	github.com/goburrow/serial v0.1.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
@@ -48,9 +39,6 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/prometheus/prometheus v0.35.0 // indirect
-	github.com/timzifer/modbus_processor/drivers/canstream v0.0.0 // indirect
-	github.com/timzifer/modbus_processor/drivers/modbus v0.0.0 // indirect
-	go.einride.tech/can v0.16.1 // indirect
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/goleak v1.3.0 // indirect
 	golang.org/x/exp v0.0.0-20240325151524-a685a6edb6d8 // indirect
