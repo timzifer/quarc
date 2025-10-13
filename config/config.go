@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -76,6 +78,7 @@ type ModuleReference struct {
 	File        string `json:"file,omitempty"`
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
+	Package     string `json:"package,omitempty"`
 }
 
 // ModuleInclude describes a referenced configuration module.
@@ -330,6 +333,18 @@ type Config struct {
 	Source      ModuleReference        `yaml:"-"`
 }
 
+type moduleContext struct {
+	packagePath []string
+	templates   map[string]*yaml.Node
+	values      map[string]*yaml.Node
+}
+
+type moduleResult struct {
+	cfg         *Config
+	packageName string
+	packagePath []string
+}
+
 // Load reads and decodes the configuration file from disk.
 func Load(path string) (*Config, error) {
 	if path == "" {
@@ -346,10 +361,24 @@ func Load(path string) (*Config, error) {
 	}
 
 	visited := make(map[string]struct{})
-	if info.IsDir() {
-		return loadDir(abs, visited)
+	ctx := moduleContext{
+		templates: make(map[string]*yaml.Node),
+		values:    make(map[string]*yaml.Node),
 	}
-	return loadFile(abs, visited)
+
+	var result *moduleResult
+	if info.IsDir() {
+		result, err = loadDir(abs, visited, ctx)
+	} else {
+		result, err = loadFile(abs, visited, ctx)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return &Config{}, nil
+	}
+	return result.cfg, nil
 }
 
 // CycleInterval returns the configured controller cycle duration.
@@ -360,7 +389,7 @@ func (c *Config) CycleInterval() time.Duration {
 	return c.Cycle.Duration
 }
 
-func loadFile(path string, visited map[string]struct{}) (*Config, error) {
+func loadFile(path string, visited map[string]struct{}, ctx moduleContext) (*moduleResult, error) {
 	if _, ok := visited[path]; ok {
 		return nil, fmt.Errorf("config include cycle detected at %s", path)
 	}
@@ -371,12 +400,71 @@ func loadFile(path string, visited map[string]struct{}) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
-	var cfg Config
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		return nil, fmt.Errorf("unmarshal config %s: %w", path, err)
+
+	prefix, err := renderTemplateInjection(ctx.templates)
+	if err != nil {
+		return nil, fmt.Errorf("prepare templates for %s: %w", path, err)
+	}
+	if len(prefix) > 0 {
+		combined := make([]byte, 0, len(prefix)+len(raw))
+		combined = append(combined, prefix...)
+		combined = append(combined, raw...)
+		raw = combined
 	}
 
-	cfg.setSource(ModuleReference{File: path, Name: cfg.Name, Description: cfg.Description})
+	var document yaml.Node
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		return nil, fmt.Errorf("unmarshal config %s: %w", path, err)
+	}
+	if len(document.Content) == 0 || document.Content[0] == nil {
+		return nil, fmt.Errorf("config %s is empty", path)
+	}
+
+	root := document.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("config %s: top-level YAML document must be a mapping", path)
+	}
+
+	pkgName, err := extractPackageName(root)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if pkgName == "" {
+		return nil, fmt.Errorf("%s: package name is required", path)
+	}
+	if err := ensureIdentifier(pkgName, "package"); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+
+	fullPath := append([]string{}, ctx.packagePath...)
+	if len(fullPath) == 0 {
+		fullPath = append(fullPath, pkgName)
+	} else {
+		expected := fullPath[len(fullPath)-1]
+		if expected != pkgName {
+			return nil, fmt.Errorf("package mismatch: expected %q, got %q", expected, pkgName)
+		}
+	}
+	packagePath := joinPackagePath(fullPath)
+
+	valuesMap := copyValueMap(ctx.values)
+	if err := loadValuesIntoMap(root, filepath.Dir(path), valuesMap); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+
+	templates := collectTemplateDefinitions(root)
+	aggregatedTemplates := mergeTemplateMaps(ctx.templates, templates)
+
+	if err := resolveValueTags(root, valuesMap); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+
+	var cfg Config
+	if err := root.Decode(&cfg); err != nil {
+		return nil, fmt.Errorf("decode config %s: %w", path, err)
+	}
+
+	cfg.setSource(ModuleReference{File: path, Name: cfg.Name, Description: cfg.Description, Package: packagePath})
 
 	modules := cfg.Modules
 	cfg.Modules = nil
@@ -396,30 +484,54 @@ func loadFile(path string, visited map[string]struct{}) (*Config, error) {
 			return nil, fmt.Errorf("load module %s: %w", module.Path, err)
 		}
 
-		var modCfg *Config
+		childPackagePath, err := computeChildPackagePath(baseDir, modulePath, fullPath, info.IsDir())
+		if err != nil {
+			return nil, fmt.Errorf("load module %s: %w", module.Path, err)
+		}
+
+		childCtx := moduleContext{
+			packagePath: childPackagePath,
+			templates:   copyTemplateMap(aggregatedTemplates),
+			values:      copyValueMap(valuesMap),
+		}
+
+		var result *moduleResult
 		if info.IsDir() {
-			modCfg, err = loadDir(modulePath, visited)
+			result, err = loadDir(modulePath, visited, childCtx)
 		} else {
-			modCfg, err = loadFile(modulePath, visited)
+			result, err = loadFile(modulePath, visited, childCtx)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("load module %s: %w", module.Path, err)
 		}
-		if modCfg == nil {
+		if result == nil || result.cfg == nil {
 			continue
 		}
-		override := ModuleReference{
-			Name:        firstNonEmpty(module.Name, modCfg.Source.Name),
-			Description: firstNonEmpty(module.Description, modCfg.Source.Description),
+		if len(childPackagePath) > 0 && !packagePathIsDescendant(result.packagePath, childPackagePath) {
+			return nil, fmt.Errorf("module %s declares package %s outside parent package %s", module.Path, joinPackagePath(result.packagePath), packagePath)
 		}
-		modCfg.applyModuleMetadata(override)
-		mergeConfig(&cfg, modCfg)
+		override := ModuleReference{
+			Name:        firstNonEmpty(module.Name, result.cfg.Source.Name),
+			Description: firstNonEmpty(module.Description, result.cfg.Source.Description),
+		}
+		result.cfg.applyModuleMetadata(override)
+		mergeConfig(&cfg, result.cfg)
 	}
 
-	return &cfg, nil
+	if err := validateConfigIdentifiers(&cfg); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+
+	return &moduleResult{cfg: &cfg, packageName: pkgName, packagePath: fullPath}, nil
 }
 
-func loadDir(path string, visited map[string]struct{}) (*Config, error) {
+func loadDir(path string, visited map[string]struct{}, ctx moduleContext) (*moduleResult, error) {
+	if _, ok := visited[path]; ok {
+		return nil, fmt.Errorf("config include cycle detected at %s", path)
+	}
+	visited[path] = struct{}{}
+	defer delete(visited, path)
+
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config dir %s: %w", path, err)
@@ -427,7 +539,9 @@ func loadDir(path string, visited map[string]struct{}) (*Config, error) {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 
 	result := &Config{}
-	result.setSource(ModuleReference{File: path})
+	result.setSource(ModuleReference{File: path, Package: joinPackagePath(ctx.packagePath)})
+
+	var dirPackage []string
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -438,13 +552,417 @@ func loadDir(path string, visited map[string]struct{}) (*Config, error) {
 			continue
 		}
 		subPath := filepath.Join(path, name)
-		cfg, err := loadFile(subPath, visited)
+		res, err := loadFile(subPath, visited, ctx)
 		if err != nil {
 			return nil, err
 		}
-		mergeConfig(result, cfg)
+		if res == nil || res.cfg == nil {
+			continue
+		}
+		if len(dirPackage) == 0 {
+			dirPackage = append([]string(nil), res.packagePath...)
+		} else if !equalPackagePath(dirPackage, res.packagePath) {
+			return nil, fmt.Errorf("%s: inconsistent package declarations (%s vs %s)", path, joinPackagePath(dirPackage), joinPackagePath(res.packagePath))
+		}
+		mergeConfig(result, res.cfg)
 	}
-	return result, nil
+
+	return &moduleResult{cfg: result, packagePath: dirPackage, packageName: lastPackageSegment(dirPackage)}, nil
+}
+
+func extractPackageName(root *yaml.Node) (string, error) {
+	if root == nil {
+		return "", nil
+	}
+	var pkg string
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key := root.Content[i]
+		if key == nil || key.Kind != yaml.ScalarNode {
+			continue
+		}
+		if strings.TrimSpace(key.Value) != "package" {
+			continue
+		}
+		value := root.Content[i+1]
+		if value == nil {
+			continue
+		}
+		if err := value.Decode(&pkg); err != nil {
+			return "", fmt.Errorf("invalid package declaration: %w", err)
+		}
+	}
+	return strings.TrimSpace(pkg), nil
+}
+
+func ensureIdentifier(value, kind string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fmt.Errorf("%s identifier must not be empty", kind)
+	}
+	if strings.Contains(trimmed, ".") {
+		return fmt.Errorf("%s %q must not contain '.'", kind, trimmed)
+	}
+	for idx, r := range trimmed {
+		if idx == 0 && unicode.IsDigit(r) {
+			return fmt.Errorf("%s %q must not start with a digit", kind, trimmed)
+		}
+		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_') {
+			return fmt.Errorf("%s %q contains invalid character %q", kind, trimmed, r)
+		}
+	}
+	return nil
+}
+
+func copyValueMap(src map[string]*yaml.Node) map[string]*yaml.Node {
+	if len(src) == 0 {
+		return make(map[string]*yaml.Node)
+	}
+	dst := make(map[string]*yaml.Node, len(src))
+	for key, node := range src {
+		dst[key] = cloneNode(node)
+	}
+	return dst
+}
+
+func copyTemplateMap(src map[string]*yaml.Node) map[string]*yaml.Node {
+	if len(src) == 0 {
+		return make(map[string]*yaml.Node)
+	}
+	dst := make(map[string]*yaml.Node, len(src))
+	for key, node := range src {
+		dst[key] = cloneNode(node)
+	}
+	return dst
+}
+
+func mergeTemplateMaps(parent, current map[string]*yaml.Node) map[string]*yaml.Node {
+	merged := copyTemplateMap(parent)
+	for key, node := range current {
+		merged[key] = cloneNode(node)
+	}
+	return merged
+}
+
+func cloneNode(n *yaml.Node) *yaml.Node {
+	if n == nil {
+		return nil
+	}
+	clone := *n
+	if len(n.Content) > 0 {
+		clone.Content = make([]*yaml.Node, len(n.Content))
+		for i, child := range n.Content {
+			clone.Content[i] = cloneNode(child)
+		}
+	}
+	if n.Alias != nil {
+		clone.Alias = cloneNode(n.Alias)
+	}
+	return &clone
+}
+
+func renderTemplateInjection(templates map[string]*yaml.Node) ([]byte, error) {
+	if len(templates) == 0 {
+		return nil, nil
+	}
+	names := make([]string, 0, len(templates))
+	for name := range templates {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	mapping := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	for _, name := range names {
+		key := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}
+		value := cloneNode(templates[name])
+		if value != nil && value.Anchor == "" {
+			value.Anchor = name
+		}
+		mapping.Content = append(mapping.Content, key, value)
+	}
+
+	root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	root.Content = append(root.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "__template_inject__"},
+		mapping,
+	)
+
+	document := &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{root}}
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(document); err != nil {
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func collectTemplateDefinitions(root *yaml.Node) map[string]*yaml.Node {
+	templates := make(map[string]*yaml.Node)
+	if root == nil || root.Kind != yaml.MappingNode {
+		return templates
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key := root.Content[i]
+		if key == nil || key.Kind != yaml.ScalarNode || strings.TrimSpace(key.Value) != "template" {
+			continue
+		}
+		value := root.Content[i+1]
+		if value == nil || value.Kind != yaml.MappingNode {
+			continue
+		}
+		for j := 0; j+1 < len(value.Content); j += 2 {
+			nameNode := value.Content[j]
+			if nameNode == nil || nameNode.Kind != yaml.ScalarNode {
+				continue
+			}
+			name := strings.TrimSpace(nameNode.Value)
+			if name == "" {
+				continue
+			}
+			tpl := cloneNode(value.Content[j+1])
+			if tpl != nil && tpl.Anchor == "" {
+				tpl.Anchor = name
+			}
+			templates[name] = tpl
+		}
+	}
+	return templates
+}
+
+func loadValuesIntoMap(root *yaml.Node, baseDir string, values map[string]*yaml.Node) error {
+	if root == nil || root.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key := root.Content[i]
+		if key == nil || key.Kind != yaml.ScalarNode || strings.TrimSpace(key.Value) != "values" {
+			continue
+		}
+		seq := root.Content[i+1]
+		if seq == nil {
+			continue
+		}
+		if seq.Kind != yaml.SequenceNode {
+			return fmt.Errorf("values block must be a sequence")
+		}
+		for _, item := range seq.Content {
+			if item == nil {
+				continue
+			}
+			switch item.Kind {
+			case yaml.ScalarNode:
+				var ref string
+				if err := item.Decode(&ref); err != nil {
+					return fmt.Errorf("decode values entry: %w", err)
+				}
+				ref = strings.TrimSpace(ref)
+				if ref == "" {
+					continue
+				}
+				path := ref
+				if !filepath.IsAbs(path) {
+					path = filepath.Join(baseDir, ref)
+				}
+				loaded, err := loadValueFile(path)
+				if err != nil {
+					return fmt.Errorf("load values %s: %w", ref, err)
+				}
+				for name, node := range loaded {
+					values[name] = node
+				}
+			case yaml.MappingNode:
+				inline := extractValuesFromMapping(item)
+				for name, node := range inline {
+					values[name] = node
+				}
+			default:
+				return fmt.Errorf("values entry at line %d must be a string path or mapping", item.Line)
+			}
+		}
+	}
+	return nil
+}
+
+func loadValueFile(path string) (map[string]*yaml.Node, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		return nil, err
+	}
+	if len(document.Content) == 0 || document.Content[0] == nil {
+		return nil, fmt.Errorf("values file %s is empty", path)
+	}
+	root := document.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("values file %s must contain a mapping", path)
+	}
+	return extractValuesFromMapping(root), nil
+}
+
+func extractValuesFromMapping(node *yaml.Node) map[string]*yaml.Node {
+	result := make(map[string]*yaml.Node)
+	if node == nil || node.Kind != yaml.MappingNode {
+		return result
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		keyNode := node.Content[i]
+		if keyNode == nil || keyNode.Kind != yaml.ScalarNode {
+			continue
+		}
+		name := strings.TrimSpace(keyNode.Value)
+		if name == "" {
+			continue
+		}
+		result[name] = cloneNode(node.Content[i+1])
+	}
+	return result
+}
+
+func resolveValueTags(node *yaml.Node, values map[string]*yaml.Node) error {
+	if node == nil {
+		return nil
+	}
+	switch node.Kind {
+	case yaml.DocumentNode, yaml.SequenceNode, yaml.MappingNode:
+		for _, child := range node.Content {
+			if err := resolveValueTags(child, values); err != nil {
+				return err
+			}
+		}
+	case yaml.ScalarNode:
+		if node.Tag == "" || strings.HasPrefix(node.Tag, "!!") {
+			return nil
+		}
+		if !strings.HasPrefix(node.Tag, "!") {
+			return nil
+		}
+		key := strings.TrimPrefix(node.Tag, "!")
+		if key == "" {
+			return fmt.Errorf("invalid value reference at line %d", node.Line)
+		}
+		value, ok := values[key]
+		if !ok {
+			return fmt.Errorf("unknown value reference %q at line %d", key, node.Line)
+		}
+		replacement := cloneNode(value)
+		if replacement == nil {
+			return fmt.Errorf("value %q resolved to nil", key)
+		}
+		node.Kind = replacement.Kind
+		node.Style = replacement.Style
+		node.Tag = replacement.Tag
+		node.Value = replacement.Value
+		node.Anchor = replacement.Anchor
+		node.Alias = replacement.Alias
+		node.Content = make([]*yaml.Node, len(replacement.Content))
+		for i := range replacement.Content {
+			node.Content[i] = cloneNode(replacement.Content[i])
+		}
+	}
+	return nil
+}
+
+func computeChildPackagePath(baseDir, modulePath string, parent []string, isDir bool) ([]string, error) {
+	rel, err := filepath.Rel(baseDir, modulePath)
+	if err != nil {
+		return nil, err
+	}
+	rel = filepath.Clean(rel)
+	if strings.HasPrefix(rel, "..") {
+		return nil, fmt.Errorf("module path %s escapes base directory", modulePath)
+	}
+	segments := make([]string, 0)
+	if rel != "." {
+		parts := strings.Split(rel, string(os.PathSeparator))
+		for _, part := range parts {
+			if part == "" || part == "." {
+				continue
+			}
+			segments = append(segments, part)
+		}
+	}
+	if !isDir && len(segments) > 0 {
+		segments = segments[:len(segments)-1]
+	}
+	child := append([]string{}, parent...)
+	child = append(child, segments...)
+	return child, nil
+}
+
+func packagePathIsDescendant(child, parent []string) bool {
+	if len(child) < len(parent) {
+		return false
+	}
+	for i := range parent {
+		if child[i] != parent[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalPackagePath(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func joinPackagePath(parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, ".")
+}
+
+func lastPackageSegment(parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
+}
+
+func validateConfigIdentifiers(cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+	for _, cell := range cfg.Cells {
+		if err := ensureIdentifier(cell.ID, "cell"); err != nil {
+			return err
+		}
+	}
+	for _, program := range cfg.Programs {
+		if err := ensureIdentifier(program.ID, "program"); err != nil {
+			return err
+		}
+	}
+	for _, logic := range cfg.Logic {
+		if err := ensureIdentifier(logic.ID, "logic block"); err != nil {
+			return err
+		}
+	}
+	for _, read := range cfg.Reads {
+		if err := ensureIdentifier(read.ID, "read group"); err != nil {
+			return err
+		}
+	}
+	for _, write := range cfg.Writes {
+		if err := ensureIdentifier(write.ID, "write target"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func mergeConfig(dst, src *Config) {
@@ -563,6 +1081,9 @@ func mergeInitialSource(child, meta ModuleReference) ModuleReference {
 	if child.Description == "" && meta.Description != "" {
 		child.Description = meta.Description
 	}
+	if child.Package == "" && meta.Package != "" {
+		child.Package = meta.Package
+	}
 	return child
 }
 
@@ -575,6 +1096,9 @@ func mergeModuleOverride(base, override ModuleReference) ModuleReference {
 	}
 	if override.Description != "" {
 		base.Description = override.Description
+	}
+	if override.Package != "" {
+		base.Package = override.Package
 	}
 	return base
 }

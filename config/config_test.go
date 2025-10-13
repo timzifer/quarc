@@ -12,14 +12,16 @@ func TestLoadModules(t *testing.T) {
 	mainPath := filepath.Join(dir, "config.yaml")
 	modulePath := filepath.Join(dir, "module.yaml")
 
-	if err := os.WriteFile(modulePath, []byte(`cells:
+	if err := os.WriteFile(modulePath, []byte(`package: main
+cells:
   - id: extra
     type: bool
 `), 0o600); err != nil {
 		t.Fatalf("write module: %v", err)
 	}
 
-	content := `cycle: 1s
+	content := `package: main
+cycle: 1s
 modules:
   - module.yaml
 cells:
@@ -44,7 +46,8 @@ func TestLoadPrograms(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 
-	content := `programs:
+	content := `package: main
+programs:
   - id: ramp1
     type: ramp
     inputs:
@@ -87,7 +90,8 @@ func TestLoadDirectory(t *testing.T) {
 	dir := t.TempDir()
 
 	fileA := filepath.Join(dir, "00-base.yaml")
-	if err := os.WriteFile(fileA, []byte(`logging:
+	if err := os.WriteFile(fileA, []byte(`package: plant
+logging:
   level: debug
 cells:
   - id: a
@@ -97,7 +101,8 @@ cells:
 	}
 
 	fileB := filepath.Join(dir, "10-extra.yaml")
-	if err := os.WriteFile(fileB, []byte(`reads:
+	if err := os.WriteFile(fileB, []byte(`package: plant
+reads:
   - id: read1
     endpoint:
       address: "localhost:502"
@@ -136,7 +141,8 @@ func TestModuleMetadataPropagation(t *testing.T) {
 	mainPath := filepath.Join(dir, "config.yaml")
 	modulePath := filepath.Join(dir, "module.yaml")
 
-	moduleContent := `cells:
+	moduleContent := `package: root
+cells:
   - id: extra
     type: bool
     name: Extra Flag
@@ -146,7 +152,8 @@ func TestModuleMetadataPropagation(t *testing.T) {
 		t.Fatalf("write module: %v", err)
 	}
 
-	mainContent := `name: Root Config
+	mainContent := `package: root
+name: Root Config
 description: Root description
 cycle: 1s
 modules:
@@ -209,5 +216,98 @@ cells:
 	}
 	if !strings.HasSuffix(extra.Source.File, "module.yaml") {
 		t.Fatalf("expected extra cell file to be module.yaml, got %q", extra.Source.File)
+	}
+}
+
+func TestTemplateInheritance(t *testing.T) {
+	dir := t.TempDir()
+
+	modulePath := filepath.Join(dir, "module.yaml")
+	if err := os.WriteFile(modulePath, []byte(`package: root
+cells:
+  - <<: *number_cell
+    id: module_cell
+`), 0o600); err != nil {
+		t.Fatalf("write module: %v", err)
+	}
+
+	mainPath := filepath.Join(dir, "config.yaml")
+	content := `package: root
+cycle: 1s
+template:
+  number_cell: &number_cell
+    type: number
+cells:
+  - <<: *number_cell
+    id: root_cell
+modules:
+  - module.yaml
+`
+	if err := os.WriteFile(mainPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write main: %v", err)
+	}
+
+	cfg, err := Load(mainPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if len(cfg.Cells) != 2 {
+		t.Fatalf("expected 2 cells, got %d", len(cfg.Cells))
+	}
+	for _, cell := range cfg.Cells {
+		if cell.Type != ValueKindNumber {
+			t.Fatalf("expected number cell, got %s", cell.Type)
+		}
+	}
+}
+
+func TestValuesSubstitution(t *testing.T) {
+	dir := t.TempDir()
+
+	valuesPath := filepath.Join(dir, "secrets.yaml")
+	if err := os.WriteFile(valuesPath, []byte("secret: hunter2\n"), 0o600); err != nil {
+		t.Fatalf("write values: %v", err)
+	}
+
+	configPath := filepath.Join(dir, "config.yaml")
+	content := `package: vault
+values:
+  - secrets.yaml
+cells:
+  - id: secret_value
+    type: string
+    constant: !secret
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.Cells) != 1 {
+		t.Fatalf("expected 1 cell, got %d", len(cfg.Cells))
+	}
+	if cfg.Cells[0].Constant != "hunter2" {
+		t.Fatalf("expected constant hunter2, got %#v", cfg.Cells[0].Constant)
+	}
+}
+
+func TestIdentifierWithDotRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `package: invalid
+cells:
+  - id: bad.name
+    type: number
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatalf("expected error for dotted identifier")
 	}
 }
