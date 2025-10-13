@@ -144,10 +144,6 @@ func (s systemLoad) snapshot() systemLoadSnapshot {
 	}
 }
 
-const (
-	defaultDriver = "modbus"
-)
-
 type Option func(*factoryRegistry)
 
 type factoryRegistry struct {
@@ -277,7 +273,7 @@ func buildReadGroups(cfgs []config.ReadGroupConfig, deps readers.ReaderDependenc
 	for _, cfg := range cfgs {
 		driver := cfg.Endpoint.Driver
 		if driver == "" {
-			driver = defaultDriver
+			return nil, fmt.Errorf("read group %s: endpoint missing driver", cfg.ID)
 		}
 		factory := factories[driver]
 		if factory == nil {
@@ -304,7 +300,7 @@ func buildWriteTargets(cfgs []config.WriteTargetConfig, deps writers.WriterDepen
 	for _, cfg := range sorted {
 		driver := cfg.Endpoint.Driver
 		if driver == "" {
-			driver = defaultDriver
+			return nil, fmt.Errorf("write target %s: endpoint missing driver", cfg.ID)
 		}
 		factory := factories[driver]
 		if factory == nil {

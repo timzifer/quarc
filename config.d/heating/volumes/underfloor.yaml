@@ -34,6 +34,7 @@ reads:
     endpoint:
       address: "10.42.1.253:502"
       unit_id: 101
+      driver: modbus
     function: holding
     start: 53
     length: 7

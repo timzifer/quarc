@@ -12,7 +12,6 @@ require (
 	github.com/shopspring/decimal v1.4.0
 	github.com/stretchr/testify v1.8.4
 	github.com/timzifer/modbus_processor/drivers/bundle v0.0.0
-	github.com/timzifer/modbus_processor/drivers/modbus v0.0.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -50,6 +49,7 @@ require (
 	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/prometheus/prometheus v0.35.0 // indirect
 	github.com/timzifer/modbus_processor/drivers/canstream v0.0.0 // indirect
+	github.com/timzifer/modbus_processor/drivers/modbus v0.0.0 // indirect
 	go.einride.tech/can v0.16.1 // indirect
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/goleak v1.3.0 // indirect
