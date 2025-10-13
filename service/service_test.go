@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -656,5 +657,131 @@ func TestSetCellValueUpdatesServerImmediately(t *testing.T) {
 	value := binary.BigEndian.Uint16(pdu[2:4])
 	if value != 123 {
 		t.Fatalf("expected register value 123, got %d", value)
+	}
+}
+
+func TestNewProgramBindingsDetectsDuplicateOutputs(t *testing.T) {
+	logger := zerolog.New(io.Discard)
+	makeCells := func() *cellStore {
+		t.Helper()
+		cells, err := newCellStore([]config.CellConfig{
+			{ID: "target", Type: config.ValueKindNumber},
+			{ID: "output", Type: config.ValueKindNumber},
+		})
+		if err != nil {
+			t.Fatalf("create cell store: %v", err)
+		}
+		return cells
+	}
+	testCases := []struct {
+		name    string
+		cfgs    []config.ProgramConfig
+		wantErr string
+	}{
+		{
+			name: "duplicate within program",
+			cfgs: []config.ProgramConfig{
+				{
+					ID:   "prog1",
+					Type: "ramp",
+					Inputs: []config.ProgramSignalConfig{{
+						ID:   "target",
+						Cell: "target",
+					}},
+					Outputs: []config.ProgramSignalConfig{
+						{ID: "value", Cell: "output"},
+						{ID: "secondary", Cell: "output"},
+					},
+				},
+			},
+			wantErr: "bound multiple times",
+		},
+		{
+			name: "duplicate across programs",
+			cfgs: []config.ProgramConfig{
+				{
+					ID:   "prog1",
+					Type: "ramp",
+					Inputs: []config.ProgramSignalConfig{{
+						ID:   "target",
+						Cell: "target",
+					}},
+					Outputs: []config.ProgramSignalConfig{{
+						ID:   "value",
+						Cell: "output",
+					}},
+				},
+				{
+					ID:   "prog2",
+					Type: "ramp",
+					Inputs: []config.ProgramSignalConfig{{
+						ID:   "target",
+						Cell: "target",
+					}},
+					Outputs: []config.ProgramSignalConfig{{
+						ID:   "value",
+						Cell: "output",
+					}},
+				},
+			},
+			wantErr: "already bound by program prog1",
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cells := makeCells()
+			_, err := newProgramBindings(tc.cfgs, cells, logger)
+			if err == nil {
+				t.Fatalf("expected error")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("unexpected error %q", err.Error())
+			}
+		})
+	}
+}
+
+func TestValidateFailsOnDuplicateProgramOutputs(t *testing.T) {
+	cfg := &config.Config{
+		Cycle: config.Duration{Duration: time.Millisecond},
+		Cells: []config.CellConfig{
+			{ID: "target", Type: config.ValueKindNumber, Constant: 1},
+			{ID: "output", Type: config.ValueKindNumber},
+		},
+		Programs: []config.ProgramConfig{
+			{
+				ID:   "prog1",
+				Type: "ramp",
+				Inputs: []config.ProgramSignalConfig{{
+					ID:   "target",
+					Cell: "target",
+				}},
+				Outputs: []config.ProgramSignalConfig{{
+					ID:   "value",
+					Cell: "output",
+				}},
+			},
+			{
+				ID:   "prog2",
+				Type: "ramp",
+				Inputs: []config.ProgramSignalConfig{{
+					ID:   "target",
+					Cell: "target",
+				}},
+				Outputs: []config.ProgramSignalConfig{{
+					ID:   "value",
+					Cell: "output",
+				}},
+			},
+		},
+	}
+
+	logger := zerolog.New(io.Discard)
+	err := Validate(cfg, logger)
+	if err == nil {
+		t.Fatalf("expected duplicate output validation error")
+	}
+	if !strings.Contains(err.Error(), "already bound by program prog1") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

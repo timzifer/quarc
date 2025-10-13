@@ -36,6 +36,7 @@ type programBinding struct {
 func newProgramBindings(cfgs []config.ProgramConfig, cells *cellStore, logger zerolog.Logger) ([]*programBinding, error) {
 	bindings := make([]*programBinding, 0, len(cfgs))
 	seen := make(map[string]struct{})
+	occupiedCells := make(map[string]string)
 	for _, cfg := range cfgs {
 		if cfg.ID == "" {
 			return nil, fmt.Errorf("program id must not be empty")
@@ -53,6 +54,7 @@ func newProgramBindings(cfgs []config.ProgramConfig, cells *cellStore, logger ze
 			return nil, fmt.Errorf("program %s: %w", cfg.ID, err)
 		}
 		binding := &programBinding{cfg: cfg, program: instance}
+		usedCells := make(map[string]struct{})
 
 		for _, inCfg := range cfg.Inputs {
 			if inCfg.Cell == "" {
@@ -99,6 +101,14 @@ func newProgramBindings(cfgs []config.ProgramConfig, cells *cellStore, logger ze
 			if err != nil {
 				return nil, fmt.Errorf("program %s output %s: %w", cfg.ID, outCfg.Cell, err)
 			}
+			if _, exists := usedCells[outCfg.Cell]; exists {
+				return nil, fmt.Errorf("program %s output %s: cell %s bound multiple times", cfg.ID, alias, outCfg.Cell)
+			}
+			if other, exists := occupiedCells[outCfg.Cell]; exists {
+				return nil, fmt.Errorf("program %s output %s: cell %s already bound by program %s", cfg.ID, alias, outCfg.Cell, other)
+			}
+			usedCells[outCfg.Cell] = struct{}{}
+			occupiedCells[outCfg.Cell] = cfg.ID
 			kind := cell.cfg.Type
 			if outCfg.Type != "" {
 				kind = outCfg.Type
