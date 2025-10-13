@@ -930,7 +930,7 @@ func TestNewProgramBindingsDetectsDuplicateOutputs(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			cells := makeCells()
-			_, err := newProgramBindings(tc.cfgs, cells, logger)
+			_, err := newProgramBindings(tc.cfgs, cells, logger, nil)
 			if err == nil {
 				t.Fatalf("expected error")
 			}

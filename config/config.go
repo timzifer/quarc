@@ -229,6 +229,35 @@ type ProgramConfig struct {
 	Source   ModuleReference        `yaml:"-"`
 }
 
+// HeatmapCooldownConfig controls how long activity stays highlighted in the live view heatmap.
+type HeatmapCooldownConfig struct {
+	Cells    int `yaml:"cells,omitempty"`
+	Logic    int `yaml:"logic,omitempty"`
+	Programs int `yaml:"programs,omitempty"`
+}
+
+// HeatmapColorConfig customises the palette used in the live view heatmap.
+type HeatmapColorConfig struct {
+	Background string `yaml:"background,omitempty"`
+	Border     string `yaml:"border,omitempty"`
+	Logic      string `yaml:"logic,omitempty"`
+	Program    string `yaml:"program,omitempty"`
+	Read       string `yaml:"read,omitempty"`
+	Stale      string `yaml:"stale,omitempty"`
+	Write      string `yaml:"write,omitempty"`
+}
+
+// HeatmapConfig configures the optional live view heatmap.
+type HeatmapConfig struct {
+	Cooldown HeatmapCooldownConfig `yaml:"cooldown,omitempty"`
+	Colors   HeatmapColorConfig    `yaml:"colors,omitempty"`
+}
+
+// LiveViewConfig exposes runtime controls for the live view endpoints.
+type LiveViewConfig struct {
+	Heatmap HeatmapConfig `yaml:"heatmap,omitempty"`
+}
+
 // DependencyConfig describes a dependency for a logic block.
 type DependencyConfig struct {
 	Cell string    `yaml:"cell"`
@@ -319,6 +348,7 @@ type Config struct {
 	Description string                 `yaml:"description,omitempty"`
 	Cycle       Duration               `yaml:"cycle"`
 	Logging     LoggingConfig          `yaml:"logging"`
+	LiveView    LiveViewConfig         `yaml:"live_view,omitempty"`
 	Telemetry   TelemetryConfig        `yaml:"telemetry"`
 	Modules     []ModuleInclude        `yaml:"modules"`
 	Workers     WorkerSlots            `yaml:"workers,omitempty"`

@@ -29,6 +29,7 @@ type liveStateResponse struct {
 	System  systemInfo        `json:"system"`
 	Reads   []liveReadGroup   `json:"reads"`
 	Writes  []liveWriteTarget `json:"writes"`
+	Heatmap heatmapState      `json:"heatmap"`
 }
 
 type liveCell struct {
@@ -239,6 +240,8 @@ func (s *liveViewServer) handleState(w http.ResponseWriter, r *http.Request) {
 		workers = append(workers, liveWorker{Kind: worker.Kind, Configured: worker.Configured, Active: worker.Active})
 	}
 	system := systemInfo{Goroutines: sys.Goroutines, Workers: workers}
+	programStates := s.service.ProgramStates()
+	heatmap := s.service.heatmapSnapshot(states, logicStates, programStates)
 	resp := liveStateResponse{
 		Cells:   cells,
 		Control: s.service.controller.Status(),
@@ -247,6 +250,7 @@ func (s *liveViewServer) handleState(w http.ResponseWriter, r *http.Request) {
 		System:  system,
 		Reads:   reads,
 		Writes:  writes,
+		Heatmap: heatmap,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
@@ -451,11 +455,28 @@ h1 { margin-bottom: 1rem; }
 .status-indicator { margin-left: auto; font-weight: 600; color: #1976d2; }
 .status-indicator.paused { color: #c62828; }
 .metrics, .system { margin-bottom: 1rem; font-size: 0.9rem; }
+.view-toggle { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
+.view-toggle button { padding: 0.45rem 1rem; border: none; border-radius: 4px; background: #e0e0e0; color: #333; cursor: pointer; transition: background 0.2s ease-in-out; }
+.view-toggle button.active { background: #1976d2; color: #fff; }
+.view-toggle button:focus { outline: 2px solid rgba(25, 118, 210, 0.4); outline-offset: 2px; }
+.view { display: none; }
+.view.active { display: block; }
+#tableView.view { margin-top: 1.5rem; }
 .tabs { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
 .tabs button { padding: 0.4rem 0.8rem; border: none; border-radius: 4px; background: #e0e0e0; cursor: pointer; }
 .tabs button.active { background: #424242; color: #fff; }
 .tab-content { display: none; }
 .tab-content.active { display: block; }
+.heatmap-section { margin-bottom: 1.5rem; }
+.heatmap-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 0.75rem; }
+.heatmap-tile { position: relative; display: flex; align-items: center; justify-content: center; border: 1px solid #424242; border-radius: 6px; min-height: 96px; aspect-ratio: 1 / 1; padding: 0.25rem; font-weight: 600; text-align: center; background: #bdbdbd; color: #222; transition: transform 0.15s ease-in-out, box-shadow 0.2s ease-in-out; }
+.heatmap-tile:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.18); }
+.heatmap-tile .tile-label { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.heatmap-empty { color: #666; font-size: 0.85rem; grid-column: 1 / -1; }
+.heatmap-tooltip { position: fixed; z-index: 1000; max-width: 320px; padding: 0.5rem 0.75rem; background: #fff; color: #222; border: 1px solid #424242; border-radius: 6px; box-shadow: 0 12px 30px rgba(0,0,0,0.25); pointer-events: none; font-size: 0.85rem; line-height: 1.35; }
+.heatmap-tooltip .tooltip-title { font-weight: 600; margin-bottom: 0.35rem; font-size: 0.95rem; }
+.heatmap-tooltip .tooltip-metric { margin: 0.12rem 0; }
+.heatmap-tooltip strong { font-weight: 600; }
 table { width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 1rem; }
 thead { background: #e0e0e0; }
 th, td { padding: 0.5rem; border: 1px solid #ccc; text-align: left; vertical-align: middle; }
@@ -484,6 +505,26 @@ tr.invalid td { color: #b71c1c; }
 </div>
 <div class="metrics" id="metrics"></div>
 <div class="system" id="systemLoad"></div>
+<div class="view-toggle" id="viewToggle">
+<button data-mode="heatmap" class="active">Heatmap</button>
+<button data-mode="table">Tabellen</button>
+</div>
+<div id="heatmapView" class="view active">
+<div class="heatmap-section">
+<h2 class="section-title">Speicher Heatmap</h2>
+<div class="heatmap-grid" id="heatmapCells"></div>
+</div>
+<div class="heatmap-section">
+<h2 class="section-title">Logik-Blöcke</h2>
+<div class="heatmap-grid" id="heatmapLogic"></div>
+</div>
+<div class="heatmap-section">
+<h2 class="section-title">Programme</h2>
+<div class="heatmap-grid" id="heatmapPrograms"></div>
+</div>
+<div id="heatmapTooltip" class="heatmap-tooltip" hidden></div>
+</div>
+<div id="tableView" class="view">
 <div class="tabs" id="tabs">
 <button data-tab="cells" class="active">Speicherzellen</button>
 <button data-tab="logic">Logik-Blöcke</button>
@@ -521,6 +562,7 @@ tr.invalid td { color: #b71c1c; }
 <tbody></tbody>
 </table>
 </div>
+</div>
 <script>
 const runBtn = document.getElementById('runBtn');
 const pauseBtn = document.getElementById('pauseBtn');
@@ -537,8 +579,16 @@ const cellsBody = cellsTable.querySelector('tbody');
 const logicBody = document.querySelector('#logic tbody');
 const readsBody = document.querySelector('#reads tbody');
 const writesBody = document.querySelector('#writes tbody');
+const viewToggle = document.getElementById('viewToggle');
+const heatmapView = document.getElementById('heatmapView');
+const tableView = document.getElementById('tableView');
+const heatmapCellsGrid = document.getElementById('heatmapCells');
+const heatmapLogicGrid = document.getElementById('heatmapLogic');
+const heatmapProgramsGrid = document.getElementById('heatmapPrograms');
+const heatmapTooltip = document.getElementById('heatmapTooltip');
 let isPaused = false;
 let refreshTimer = null;
+let activeView = 'heatmap';
 
 function startUpdateLoop() {
   if (refreshTimer === null) {
@@ -579,6 +629,39 @@ tabs.addEventListener('click', function(event) {
   setActiveTab(btn.dataset.tab);
 });
 
+function setActiveView(mode) {
+  if (mode !== 'heatmap' && mode !== 'table') {
+    return;
+  }
+  activeView = mode;
+  if (viewToggle) {
+    viewToggle.querySelectorAll('button[data-mode]').forEach(function(btn) {
+      btn.classList.toggle('active', btn.dataset.mode === mode);
+    });
+  }
+  if (heatmapView) {
+    heatmapView.classList.toggle('active', mode === 'heatmap');
+  }
+  if (tableView) {
+    tableView.classList.toggle('active', mode === 'table');
+  }
+  if (mode !== 'heatmap') {
+    hideHeatmapTooltip();
+  }
+}
+
+if (viewToggle) {
+  viewToggle.addEventListener('click', function(event) {
+    const btn = event.target.closest('button[data-mode]');
+    if (!btn) {
+      return;
+    }
+    setActiveView(btn.dataset.mode);
+  });
+}
+
+setActiveView('heatmap');
+
 function formatTimestamp(value) {
   if (!value) {
     return '';
@@ -595,6 +678,431 @@ function formatNumber(value) {
     return '0.00';
   }
   return value.toFixed(2);
+}
+
+function escapeHtml(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function stringifyValue(value) {
+  if (value === null || value === undefined) {
+    return '—';
+  }
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch (error) {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function formatAccessKind(kind) {
+  if (kind === 'read') {
+    return 'Lesen';
+  }
+  if (kind === 'write') {
+    return 'Schreiben';
+  }
+  return '—';
+}
+
+function formatWriteKind(kind) {
+  switch (kind) {
+    case 'logic':
+      return 'Logik';
+    case 'logic_invalid':
+      return 'Logik (Fehler)';
+    case 'program':
+      return 'Programm';
+    case 'program_invalid':
+      return 'Programm (Fehler)';
+    case 'manual':
+      return 'Manuell';
+    default:
+      return '';
+  }
+}
+
+function formatSource(source) {
+  if (!source) {
+    return '';
+  }
+  const parts = [];
+  if (source.package) {
+    parts.push(source.package);
+  }
+  if (source.file) {
+    parts.push(source.file);
+  }
+  if (source.name) {
+    parts.push(source.name);
+  }
+  if (source.description) {
+    parts.push(source.description);
+  }
+  return parts.join(' · ');
+}
+
+function hexToRgb(hex) {
+  if (typeof hex !== 'string') {
+    return null;
+  }
+  let value = hex.trim();
+  if (value[0] === '#') {
+    value = value.slice(1);
+  }
+  if (value.length === 3) {
+    value = value.split('').map(function(ch) { return ch + ch; }).join('');
+  }
+  if (value.length !== 6) {
+    return null;
+  }
+  const num = parseInt(value, 16);
+  if (Number.isNaN(num)) {
+    return null;
+  }
+  return {
+    r: (num >> 16) & 255,
+    g: (num >> 8) & 255,
+    b: num & 255
+  };
+}
+
+function mixToColor(baseHex, staleHex, ratio) {
+  const from = hexToRgb(staleHex) || { r: 189, g: 189, b: 189 };
+  const to = hexToRgb(baseHex) || from;
+  const clamped = Math.max(0, Math.min(1, Number.isFinite(ratio) ? ratio : 0));
+  const r = Math.round(from.r + (to.r - from.r) * clamped);
+  const g = Math.round(from.g + (to.g - from.g) * clamped);
+  const b = Math.round(from.b + (to.b - from.b) * clamped);
+  return { css: 'rgb(' + r + ', ' + g + ', ' + b + ')', r: r, g: g, b: b };
+}
+
+function getTextColor(rgb) {
+  if (!rgb) {
+    return '#222';
+  }
+  const brightness = (rgb.r * 299 + rgb.g * 587 + rgb.b * 114) / 1000;
+  return brightness > 160 ? '#1a1a1a' : '#ffffff';
+}
+
+function computeIntensity(lastCycle, cooldown, cycleCount) {
+  if (!lastCycle || typeof lastCycle !== 'number' || lastCycle <= 0) {
+    return 0;
+  }
+  if (typeof cooldown !== 'number' || cooldown <= 0) {
+    return 1;
+  }
+  const delta = cycleCount - lastCycle;
+  if (delta <= 0) {
+    return 1;
+  }
+  if (delta >= cooldown) {
+    return 0;
+  }
+  return 1 - (delta / cooldown);
+}
+
+function computeCellColor(tile, colors, cooldown, cycleCount) {
+  const staleColor = colors.stale || '#bdbdbd';
+  let baseColor = staleColor;
+  let lastCycle = 0;
+  if (tile) {
+    if (tile.last_access_kind === 'write') {
+      baseColor = colors.write || '#ef5350';
+      lastCycle = tile.last_access_cycle || tile.last_write_cycle || 0;
+    } else if (tile.last_access_kind === 'read') {
+      baseColor = colors.read || '#4caf50';
+      lastCycle = tile.last_access_cycle || tile.last_read_cycle || 0;
+    } else if (tile.last_write_cycle) {
+      baseColor = colors.write || '#ef5350';
+      lastCycle = tile.last_write_cycle;
+    } else if (tile.last_read_cycle) {
+      baseColor = colors.read || '#4caf50';
+      lastCycle = tile.last_read_cycle;
+    }
+  }
+  const intensity = computeIntensity(lastCycle, cooldown, cycleCount);
+  const mixed = mixToColor(baseColor, staleColor, intensity);
+  return {
+    css: mixed.css,
+    textColor: getTextColor(mixed),
+    borderColor: colors.border || '#424242'
+  };
+}
+
+function computeLogicColor(tile, colors, cooldown, cycleCount) {
+  const baseColor = colors.logic || '#29b6f6';
+  const staleColor = colors.stale || '#bdbdbd';
+  const lastCycle = tile && typeof tile.last_cycle === 'number' ? tile.last_cycle : 0;
+  const intensity = computeIntensity(lastCycle, cooldown, cycleCount);
+  const mixed = mixToColor(baseColor, staleColor, intensity);
+  return {
+    css: mixed.css,
+    textColor: getTextColor(mixed),
+    borderColor: colors.border || '#424242'
+  };
+}
+
+function computeProgramColor(tile, colors, cooldown, cycleCount) {
+  const baseColor = colors.program || '#ab47bc';
+  const staleColor = colors.stale || '#bdbdbd';
+  const lastCycle = tile && typeof tile.last_cycle === 'number' ? tile.last_cycle : 0;
+  const intensity = computeIntensity(lastCycle, cooldown, cycleCount);
+  const mixed = mixToColor(baseColor, staleColor, intensity);
+  return {
+    css: mixed.css,
+    textColor: getTextColor(mixed),
+    borderColor: colors.border || '#424242'
+  };
+}
+
+function attachHeatmapTooltip(element, html) {
+  if (!element) {
+    return;
+  }
+  element.addEventListener('mouseenter', function(event) {
+    if (!html) {
+      return;
+    }
+    showHeatmapTooltip(html, event);
+  });
+  element.addEventListener('mousemove', positionHeatmapTooltip);
+  element.addEventListener('mouseleave', hideHeatmapTooltip);
+}
+
+function showHeatmapTooltip(html, event) {
+  if (!heatmapTooltip || activeView !== 'heatmap') {
+    return;
+  }
+  heatmapTooltip.innerHTML = html;
+  heatmapTooltip.removeAttribute('hidden');
+  positionHeatmapTooltip(event);
+}
+
+function positionHeatmapTooltip(event) {
+  if (!heatmapTooltip || heatmapTooltip.hasAttribute('hidden')) {
+    return;
+  }
+  const offset = 16;
+  const width = heatmapTooltip.offsetWidth;
+  const height = heatmapTooltip.offsetHeight;
+  let left = event.clientX + offset;
+  let top = event.clientY + offset;
+  if (left + width > window.innerWidth) {
+    left = event.clientX - width - offset;
+  }
+  if (top + height > window.innerHeight) {
+    top = event.clientY - height - offset;
+  }
+  heatmapTooltip.style.left = Math.max(8, left) + 'px';
+  heatmapTooltip.style.top = Math.max(8, top) + 'px';
+}
+
+function hideHeatmapTooltip() {
+  if (heatmapTooltip) {
+    heatmapTooltip.setAttribute('hidden', '');
+  }
+}
+
+function renderHeatmapTiles(options) {
+  const tiles = Array.isArray(options.tiles) ? options.tiles : [];
+  const container = options.container;
+  if (!container) {
+    return;
+  }
+  container.innerHTML = '';
+  if (tiles.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'heatmap-empty';
+    empty.textContent = options.fallback || 'Keine Daten verfügbar.';
+    container.appendChild(empty);
+    return;
+  }
+  tiles.forEach(function(tile) {
+    const el = document.createElement('div');
+    el.className = 'heatmap-tile';
+    const colorInfo = options.getColor ? options.getColor(tile) : null;
+    if (colorInfo && colorInfo.css) {
+      el.style.backgroundColor = colorInfo.css;
+      el.style.color = colorInfo.textColor || '#222';
+      el.style.borderColor = colorInfo.borderColor || options.borderColor || '#424242';
+    } else {
+      el.style.backgroundColor = '#bdbdbd';
+      el.style.borderColor = options.borderColor || '#424242';
+    }
+    const label = document.createElement('span');
+    label.className = 'tile-label';
+    label.textContent = options.getLabel ? String(options.getLabel(tile) || '') : '';
+    el.appendChild(label);
+    const tooltipHtml = options.getTooltip ? options.getTooltip(tile) : '';
+    if (tooltipHtml) {
+      attachHeatmapTooltip(el, tooltipHtml);
+    }
+    container.appendChild(el);
+  });
+}
+
+function renderCellTooltip(tile, cell) {
+  const parts = [];
+  const cellId = tile && tile.id ? tile.id : '';
+  const title = cell && cell.name ? cell.name : cellId;
+  if (title) {
+    parts.push('<div class="tooltip-title">' + escapeHtml(title) + '</div>');
+  }
+  if (cell && cell.name && cellId) {
+    parts.push('<div class="tooltip-metric"><strong>ID:</strong> ' + escapeHtml(cellId) + '</div>');
+  }
+  if (cell && cell.description) {
+    parts.push('<div class="tooltip-metric"><strong>Beschreibung:</strong> ' + escapeHtml(cell.description) + '</div>');
+  }
+  if (cell && cell.kind) {
+    parts.push('<div class="tooltip-metric"><strong>Typ:</strong> ' + escapeHtml(cell.kind) + '</div>');
+  }
+  if (cell) {
+    parts.push('<div class="tooltip-metric"><strong>Wert:</strong> ' + escapeHtml(stringifyValue(cell.value)) + '</div>');
+    parts.push('<div class="tooltip-metric"><strong>Gültig:</strong> ' + (cell.valid ? 'Ja' : 'Nein') + '</div>');
+    parts.push('<div class="tooltip-metric"><strong>Quality:</strong> ' + (cell.quality !== null && cell.quality !== undefined ? escapeHtml(cell.quality) : '—') + '</div>');
+    parts.push('<div class="tooltip-metric"><strong>Aktualisiert:</strong> ' + (formatTimestamp(cell.updated_at) || '—') + '</div>');
+  }
+  if (tile) {
+    if (tile.last_access_kind) {
+      const accessLabel = formatAccessKind(tile.last_access_kind);
+      const accessTime = formatTimestamp(tile.last_access_time) || '—';
+      parts.push('<div class="tooltip-metric"><strong>Letzter Zugriff:</strong> ' + escapeHtml(accessLabel) + ' · ' + accessTime + '</div>');
+    }
+    if (tile.last_read_cycle) {
+      const origin = tile.last_read_origin ? ' (' + escapeHtml(tile.last_read_origin) + ')' : '';
+      parts.push('<div class="tooltip-metric"><strong>Letzte Lesung:</strong> ' + (formatTimestamp(tile.last_read_time) || '—') + origin + '</div>');
+    }
+    if (tile.read_count) {
+      parts.push('<div class="tooltip-metric"><strong>Lesungen gesamt:</strong> ' + tile.read_count + '</div>');
+    }
+    if (tile.last_write_cycle) {
+      const writeKind = formatWriteKind(tile.last_write_kind);
+      const writeOrigin = tile.last_write_origin ? ' (' + escapeHtml(tile.last_write_origin) + ')' : '';
+      const writeLabel = writeKind ? writeKind + writeOrigin : writeOrigin;
+      parts.push('<div class="tooltip-metric"><strong>Letzter Schreibzugriff:</strong> ' + (formatTimestamp(tile.last_write_time) || '—') + (writeLabel ? ' · ' + writeLabel : '') + '</div>');
+    }
+    if (tile.write_count) {
+      parts.push('<div class="tooltip-metric"><strong>Schreibzugriffe gesamt:</strong> ' + tile.write_count + '</div>');
+    }
+  }
+  return parts.join('');
+}
+
+function renderLogicTooltip(tile) {
+  if (!tile) {
+    return '';
+  }
+  const parts = [];
+  const id = tile.id || '';
+  if (id) {
+    parts.push('<div class="tooltip-title">' + escapeHtml(id) + '</div>');
+  }
+  if (tile.target) {
+    parts.push('<div class="tooltip-metric"><strong>Ziel:</strong> ' + escapeHtml(tile.target) + '</div>');
+  }
+  parts.push('<div class="tooltip-metric"><strong>Aufrufe:</strong> ' + (tile.calls || 0) + '</div>');
+  parts.push('<div class="tooltip-metric"><strong>Fehler:</strong> ' + (tile.errors || 0) + '</div>');
+  if (tile.last_time) {
+    parts.push('<div class="tooltip-metric"><strong>Letzte Ausführung:</strong> ' + (formatTimestamp(tile.last_time) || '—') + '</div>');
+  }
+  const sourceText = formatSource(tile.source);
+  if (sourceText) {
+    parts.push('<div class="tooltip-metric"><strong>Quelle:</strong> ' + escapeHtml(sourceText) + '</div>');
+  }
+  return parts.join('');
+}
+
+function renderProgramTooltip(tile) {
+  if (!tile) {
+    return '';
+  }
+  const parts = [];
+  const id = tile.id || '';
+  if (id) {
+    parts.push('<div class="tooltip-title">' + escapeHtml(id) + '</div>');
+  }
+  if (tile.type) {
+    parts.push('<div class="tooltip-metric"><strong>Typ:</strong> ' + escapeHtml(tile.type) + '</div>');
+  }
+  if (Array.isArray(tile.outputs) && tile.outputs.length > 0) {
+    parts.push('<div class="tooltip-metric"><strong>Ausgänge:</strong> ' + escapeHtml(tile.outputs.join(', ')) + '</div>');
+  }
+  parts.push('<div class="tooltip-metric"><strong>Aufrufe:</strong> ' + (tile.calls || 0) + '</div>');
+  parts.push('<div class="tooltip-metric"><strong>Fehler:</strong> ' + (tile.errors || 0) + '</div>');
+  if (tile.last_time) {
+    parts.push('<div class="tooltip-metric"><strong>Letzte Ausführung:</strong> ' + (formatTimestamp(tile.last_time) || '—') + '</div>');
+  }
+  const sourceText = formatSource(tile.source);
+  if (sourceText) {
+    parts.push('<div class="tooltip-metric"><strong>Quelle:</strong> ' + escapeHtml(sourceText) + '</div>');
+  }
+  return parts.join('');
+}
+
+function renderHeatmap(state) {
+  if (!heatmapCellsGrid || !heatmapLogicGrid || !heatmapProgramsGrid) {
+    return;
+  }
+  hideHeatmapTooltip();
+  const heatmap = state && state.heatmap ? state.heatmap : null;
+  const config = heatmap && heatmap.config ? heatmap.config : {};
+  const colors = config.colors || {};
+  const cooldown = config.cooldown || {};
+  const cycleCount = state && state.metrics && typeof state.metrics.CycleCount === 'number' ? state.metrics.CycleCount : 0;
+  if (heatmapView) {
+    heatmapView.style.backgroundColor = colors.background || '';
+  }
+  if (heatmapTooltip) {
+    heatmapTooltip.style.borderColor = colors.border || '#424242';
+  }
+  const cellsById = new Map();
+  if (state && Array.isArray(state.cells)) {
+    state.cells.forEach(function(cell) {
+      if (cell && cell.id) {
+        cellsById.set(cell.id, cell);
+      }
+    });
+  }
+  renderHeatmapTiles({
+    tiles: heatmap && Array.isArray(heatmap.cells) ? heatmap.cells : [],
+    container: heatmapCellsGrid,
+    fallback: 'Keine Speicherzellen konfiguriert.',
+    getLabel: function(tile) { return tile && tile.id ? tile.id : '—'; },
+    getColor: function(tile) { return computeCellColor(tile, colors, cooldown.cells, cycleCount); },
+    getTooltip: function(tile) { return renderCellTooltip(tile, cellsById.get(tile && tile.id)); },
+    borderColor: colors.border
+  });
+  renderHeatmapTiles({
+    tiles: heatmap && Array.isArray(heatmap.logic) ? heatmap.logic : [],
+    container: heatmapLogicGrid,
+    fallback: 'Keine Logik-Blöcke konfiguriert.',
+    getLabel: function(tile) { return tile && tile.id ? tile.id : '—'; },
+    getColor: function(tile) { return computeLogicColor(tile, colors, cooldown.logic, cycleCount); },
+    getTooltip: renderLogicTooltip,
+    borderColor: colors.border
+  });
+  renderHeatmapTiles({
+    tiles: heatmap && Array.isArray(heatmap.programs) ? heatmap.programs : [],
+    container: heatmapProgramsGrid,
+    fallback: 'Keine Programme konfiguriert.',
+    getLabel: function(tile) { return tile && tile.id ? tile.id : '—'; },
+    getColor: function(tile) { return computeProgramColor(tile, colors, cooldown.programs, cycleCount); },
+    getTooltip: renderProgramTooltip,
+    borderColor: colors.border
+  });
 }
 
 function renderMetrics(metrics) {
@@ -804,6 +1312,7 @@ function fetchState() {
       const paused = updateControllerStatus(data.control);
       renderCells(data.cells || [], paused);
       renderMetrics(data.metrics);
+      renderHeatmap(data);
       renderSystem(data.system);
       renderLogic(data.logic);
       renderReads(data.reads);

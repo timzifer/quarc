@@ -12,6 +12,7 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/timzifer/modbus_processor/config"
 
+	"github.com/timzifer/modbus_processor/runtime/activity"
 	runtimeReaders "github.com/timzifer/modbus_processor/runtime/readers"
 	"github.com/timzifer/modbus_processor/runtime/state"
 )
@@ -32,6 +33,7 @@ type readGroup struct {
 	disabled      atomic.Bool
 	lastRun       time.Time
 	lastDuration  time.Duration
+	activity      activity.Tracker
 }
 
 // NewReaderFactory builds a Modbus read group factory.
@@ -61,7 +63,7 @@ func newReadGroup(cfg config.ReadGroupConfig, deps runtimeReaders.ReaderDependen
 	if resolved.Function == "" {
 		return nil, fmt.Errorf("read group %s missing function", resolved.ID)
 	}
-	group := &readGroup{cfg: resolved, clientFactory: factory}
+	group := &readGroup{cfg: resolved, clientFactory: factory, activity: deps.Activity}
 	group.disabled.Store(resolved.Disable)
 	for _, sigCfg := range resolved.Signals {
 		cell, err := deps.Cells.Get(sigCfg.Cell)
@@ -145,7 +147,9 @@ func (g *readGroup) Perform(now time.Time, logger zerolog.Logger) int {
 			sig.cell.MarkInvalid(now, "read.marshal", err.Error())
 			logger.Error().Err(err).Str("group", g.cfg.ID).Str("cell", sig.cfg.Cell).Msg("signal decode failed")
 			errors++
+			continue
 		}
+		g.recordRead(sig.cfg.Cell, now)
 	}
 	duration := time.Since(start)
 	g.mu.Lock()
@@ -190,6 +194,13 @@ func (g *readGroup) invalidateAll(ts time.Time, code, message string) {
 	for _, sig := range g.signals {
 		sig.cell.MarkInvalid(ts, code, message)
 	}
+}
+
+func (g *readGroup) recordRead(cellID string, ts time.Time) {
+	if g == nil || g.activity == nil {
+		return
+	}
+	g.activity.RecordCellRead(cellID, g.cfg.ID, ts)
 }
 
 func (g *readGroup) SetDisabled(disabled bool) {
