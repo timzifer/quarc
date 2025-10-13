@@ -5,8 +5,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/timzifer/modbus_processor/config"
-	"github.com/timzifer/modbus_processor/runtime/activity"
+	"github.com/timzifer/quarc/config"
+	"github.com/timzifer/quarc/runtime/activity"
 )
 
 const (

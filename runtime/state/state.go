@@ -3,7 +3,7 @@ package state
 import (
 	"time"
 
-	"github.com/timzifer/modbus_processor/config"
+	"github.com/timzifer/quarc/config"
 )
 
 // Cell models a single logical value managed by the service runtime.

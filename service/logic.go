@@ -14,7 +14,7 @@ import (
 	"github.com/expr-lang/expr/vm"
 	"github.com/rs/zerolog"
 	"github.com/shopspring/decimal"
-	"github.com/timzifer/modbus_processor/config"
+	"github.com/timzifer/quarc/config"
 )
 
 type logicDependency struct {
@@ -24,10 +24,10 @@ type logicDependency struct {
 }
 
 type logicBlock struct {
-        cfg                     config.LogicBlockConfig
-        target                  *cell
-        deps                    []logicDependency
-        trackedDeps             []logicDependency
+	cfg                     config.LogicBlockConfig
+	target                  *cell
+	deps                    []logicDependency
+	trackedDeps             []logicDependency
 	expression              *vm.Program
 	validExpr               *vm.Program
 	qualityExpr             *vm.Program
@@ -37,9 +37,9 @@ type logicBlock struct {
 	validDependencyIDs      []string
 	qualityDependencyIDs    []string
 	dependents              []*logicBlock
-        internalDependencies    int
-        metrics                 logicBlockMetrics
-        activity                *activityTracker
+	internalDependencies    int
+	metrics                 logicBlockMetrics
+	activity                *activityTracker
 }
 
 type dependencySnapshot struct {
@@ -83,17 +83,17 @@ func (e evaluationError) Error() string {
 }
 
 func newLogicBlocks(cfgs []config.LogicBlockConfig, cells *cellStore, dsl *dslEngine, logger zerolog.Logger, tracker *activityTracker) ([]*logicBlock, []*logicBlock, error) {
-        blocks := make([]*logicBlock, 0, len(cfgs))
-        producers := make(map[string]*logicBlock)
-        logicLogger := logger.With().Str("component", "logic").Logger()
+	blocks := make([]*logicBlock, 0, len(cfgs))
+	producers := make(map[string]*logicBlock)
+	logicLogger := logger.With().Str("component", "logic").Logger()
 
-        for idx, cfg := range cfgs {
-                block, _, err := prepareLogicBlock(cfg, cells, dsl, idx, tracker)
-                if err != nil {
-                        return nil, nil, err
-                }
+	for idx, cfg := range cfgs {
+		block, _, err := prepareLogicBlock(cfg, cells, dsl, idx, tracker)
+		if err != nil {
+			return nil, nil, err
+		}
 
-                if block.expression != nil {
+		if block.expression != nil {
 			logicLogger.Debug().
 				Str("block", cfg.ID).
 				Str("expression", strings.TrimSpace(cfg.Expression)).
@@ -148,9 +148,9 @@ type dependencyMeta struct {
 }
 
 func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEngine, order int, tracker *activityTracker) (*logicBlock, map[string]*dependencyMeta, error) {
-        block := &logicBlock{cfg: cfg, dsl: dsl, order: order, activity: tracker}
-        meta := make(map[string]*dependencyMeta)
-        thresholds := make(map[string]float64)
+	block := &logicBlock{cfg: cfg, dsl: dsl, order: order, activity: tracker}
+	meta := make(map[string]*dependencyMeta)
+	thresholds := make(map[string]float64)
 
 	ensure := func(id string) *dependencyMeta {
 		if id == "" {
@@ -541,31 +541,31 @@ func topoSort(blocks []*logicBlock, producers map[string]*logicBlock) ([]*logicB
 }
 
 func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue, mu *sync.RWMutex, logger zerolog.Logger) int {
-        errors := 0
-        if b.target == nil {
-                return 0
-        }
+	errors := 0
+	if b.target == nil {
+		return 0
+	}
 
 	blockLogger := logger.With().Str("block", b.cfg.ID).Logger()
 	blockLogger.Trace().Msg("logic block evaluation started")
 
 	view := cloneSnapshotValues(snapshot, mu)
-        if !b.shouldEvaluate(view) {
-                blockLogger.Trace().Msg("skipping evaluation (inputs unchanged)")
-                return 0
-        }
-        evaluated := true
-        success := false
-        defer func() {
-                if b.activity != nil && evaluated {
-                        b.activity.RecordLogic(b.cfg.ID, now, success)
-                }
-        }()
-        ready := b.dependenciesReady(view)
-        start := time.Now()
-        defer func() {
-                b.metrics.recordCall(time.Since(start))
-        }()
+	if !b.shouldEvaluate(view) {
+		blockLogger.Trace().Msg("skipping evaluation (inputs unchanged)")
+		return 0
+	}
+	evaluated := true
+	success := false
+	defer func() {
+		if b.activity != nil && evaluated {
+			b.activity.RecordLogic(b.cfg.ID, now, success)
+		}
+	}()
+	ready := b.dependenciesReady(view)
+	start := time.Now()
+	defer func() {
+		b.metrics.recordCall(time.Since(start))
+	}()
 	var (
 		value   interface{}
 		evalErr error
@@ -583,58 +583,58 @@ func (b *logicBlock) evaluate(now time.Time, snapshot map[string]*snapshotValue,
 		}
 	}
 
-        decision, valErr := b.runValidation(view, value, evalErr)
-        if valErr != nil {
-                blockLogger.Error().Err(valErr).Msg("validate evaluation failed")
-                b.target.markInvalid(now, "logic.validate_error", valErr.Error())
-                b.recordTargetWrite(now, "logic_invalid")
-                updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
-                errors++
-                return errors
-        }
+	decision, valErr := b.runValidation(view, value, evalErr)
+	if valErr != nil {
+		blockLogger.Error().Err(valErr).Msg("validate evaluation failed")
+		b.target.markInvalid(now, "logic.validate_error", valErr.Error())
+		b.recordTargetWrite(now, "logic_invalid")
+		updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
+		errors++
+		return errors
+	}
 
 	if evalErr != nil && decision.valid {
 		blockLogger.Warn().Err(evalErr).Msg("validator ignored expression error")
 		decision.valid = false
 	}
 
-        if decision.valid {
-                if err := b.target.setValue(value, now, decision.quality); err != nil {
-                        blockLogger.Error().Err(err).Msg("assign result")
-                        b.target.markInvalid(now, "logic.assign", err.Error())
-                        b.recordTargetWrite(now, "logic_invalid")
-                        updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
-                        errors++
-                        return errors
-                }
-                b.recordTargetWrite(now, "logic")
-                updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
-                blockLogger.Trace().Bool("success", true).Msg("logic block evaluation completed")
-                success = true
-                return errors
-        }
+	if decision.valid {
+		if err := b.target.setValue(value, now, decision.quality); err != nil {
+			blockLogger.Error().Err(err).Msg("assign result")
+			b.target.markInvalid(now, "logic.assign", err.Error())
+			b.recordTargetWrite(now, "logic_invalid")
+			updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
+			errors++
+			return errors
+		}
+		b.recordTargetWrite(now, "logic")
+		updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
+		blockLogger.Trace().Bool("success", true).Msg("logic block evaluation completed")
+		success = true
+		return errors
+	}
 
-        diag := decision.diagnosis(now)
-        if diag == nil && evalErr != nil {
-                diag = evaluationErrorDiagnosis(evalErr, now)
-        }
-        if diag != nil {
-                b.target.markInvalid(now, diag.Code, diag.Message)
-        } else {
-                b.target.markInvalid(now, "logic.invalid", "evaluation failed")
-        }
-        b.recordTargetWrite(now, "logic_invalid")
-        updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
-        blockLogger.Trace().Bool("success", false).Msg("logic block evaluation completed")
-        errors++
-        return errors
+	diag := decision.diagnosis(now)
+	if diag == nil && evalErr != nil {
+		diag = evaluationErrorDiagnosis(evalErr, now)
+	}
+	if diag != nil {
+		b.target.markInvalid(now, diag.Code, diag.Message)
+	} else {
+		b.target.markInvalid(now, "logic.invalid", "evaluation failed")
+	}
+	b.recordTargetWrite(now, "logic_invalid")
+	updateSnapshotValue(snapshot, mu, b.target.cfg.ID, b.target.asSnapshotValue())
+	blockLogger.Trace().Bool("success", false).Msg("logic block evaluation completed")
+	errors++
+	return errors
 }
 
 func (b *logicBlock) recordTargetWrite(ts time.Time, kind string) {
-        if b == nil || b.activity == nil || b.target == nil {
-                return
-        }
-        b.activity.RecordCellWrite(b.target.cfg.ID, b.cfg.ID, kind, ts)
+	if b == nil || b.activity == nil || b.target == nil {
+		return
+	}
+	b.activity.RecordCellWrite(b.target.cfg.ID, b.cfg.ID, kind, ts)
 }
 
 func (b *logicBlock) dependenciesReady(snapshot map[string]*snapshotValue) bool {

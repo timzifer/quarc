@@ -4,7 +4,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/timzifer/modbus_processor/config"
+	"github.com/timzifer/quarc/config"
 )
 
 type selectionMode int

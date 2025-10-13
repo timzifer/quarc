@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/timzifer/modbus_processor/config"
+	"github.com/timzifer/quarc/config"
 )
 
 type liveViewServer struct {

@@ -1,4 +1,4 @@
-module github.com/timzifer/modbus_processor
+module github.com/timzifer/quarc
 
 go 1.24.3
 

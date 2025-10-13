@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/rs/zerolog"
-	"github.com/timzifer/modbus_processor/config"
+	"github.com/timzifer/quarc/config"
 )
 
 func TestConvertStandaloneDumpAndLogCalls(t *testing.T) {

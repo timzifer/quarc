@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/timzifer/modbus_processor/config"
+	"github.com/timzifer/quarc/config"
 )
 
 func TestNewHeatmapSettingsOverrides(t *testing.T) {

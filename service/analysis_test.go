@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	"github.com/timzifer/modbus_processor/config"
+	"github.com/timzifer/quarc/config"
 )
 
 func TestAnalyzeLogicCellWriters(t *testing.T) {

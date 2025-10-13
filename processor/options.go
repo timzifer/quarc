@@ -5,12 +5,12 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog"
-	"github.com/timzifer/modbus_processor/config"
+	"github.com/timzifer/quarc/config"
 
-	"github.com/timzifer/modbus_processor/programs"
-	"github.com/timzifer/modbus_processor/service"
-	"github.com/timzifer/modbus_processor/serviceio"
-	"github.com/timzifer/modbus_processor/telemetry"
+	"github.com/timzifer/quarc/programs"
+	"github.com/timzifer/quarc/service"
+	"github.com/timzifer/quarc/serviceio"
+	"github.com/timzifer/quarc/telemetry"
 )
 
 // WithLogger provides a custom logger instance for the processor.

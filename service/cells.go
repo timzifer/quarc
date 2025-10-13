@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
-	"github.com/timzifer/modbus_processor/config"
-	"github.com/timzifer/modbus_processor/runtime/state"
+	"github.com/timzifer/quarc/config"
+	"github.com/timzifer/quarc/runtime/state"
 )
 
 type diagnosis struct {

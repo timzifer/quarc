@@ -1,7 +1,7 @@
 package programs
 
 import (
-	"github.com/timzifer/modbus_processor/config"
+	"github.com/timzifer/quarc/config"
 )
 
 type flipFlopMode int

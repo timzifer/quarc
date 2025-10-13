@@ -11,7 +11,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/shopspring/decimal"
-	"github.com/timzifer/modbus_processor/config"
+	"github.com/timzifer/quarc/config"
 )
 
 type serverMapping struct {

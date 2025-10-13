@@ -5,8 +5,8 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/timzifer/modbus_processor/config"
-	"github.com/timzifer/modbus_processor/runtime/state"
+	"github.com/timzifer/quarc/config"
+	"github.com/timzifer/quarc/runtime/state"
 )
 
 // Writer represents a write target that periodically flushes values to a remote

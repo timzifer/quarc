@@ -13,10 +13,10 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/timzifer/modbus_processor/config"
-	service2 "github.com/timzifer/modbus_processor/service"
+	"github.com/timzifer/quarc/config"
+	service2 "github.com/timzifer/quarc/service"
 
-	"github.com/timzifer/modbus_processor/processor"
+	"github.com/timzifer/quarc/processor"
 )
 
 func main() {

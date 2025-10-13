@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/timzifer/modbus_processor/config"
-	"github.com/timzifer/modbus_processor/runtime/readers"
-	"github.com/timzifer/modbus_processor/runtime/state"
-	"github.com/timzifer/modbus_processor/runtime/writers"
+	"github.com/timzifer/quarc/config"
+	"github.com/timzifer/quarc/runtime/readers"
+	"github.com/timzifer/quarc/runtime/state"
+	"github.com/timzifer/quarc/runtime/writers"
 )
 
 type fakeClient struct {

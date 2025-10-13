@@ -1,9 +1,9 @@
 package serviceio
 
 import (
-	readers "github.com/timzifer/modbus_processor/runtime/readers"
-	state "github.com/timzifer/modbus_processor/runtime/state"
-	writers "github.com/timzifer/modbus_processor/runtime/writers"
+	readers "github.com/timzifer/quarc/runtime/readers"
+	state "github.com/timzifer/quarc/runtime/state"
+	writers "github.com/timzifer/quarc/runtime/writers"
 )
 
 // Deprecated: use runtime/state.Cell.

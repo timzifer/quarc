@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/timzifer/modbus_processor/config"
-	"github.com/timzifer/modbus_processor/runtime/readers"
-	"github.com/timzifer/modbus_processor/runtime/writers"
+	"github.com/timzifer/quarc/config"
+	"github.com/timzifer/quarc/runtime/readers"
+	"github.com/timzifer/quarc/runtime/writers"
 )
 
 // Service implements the deterministic three-phase controller.

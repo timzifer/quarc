@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/timzifer/modbus_processor/config"
+	"github.com/timzifer/quarc/config"
 
-	"github.com/timzifer/modbus_processor/programs"
+	"github.com/timzifer/quarc/programs"
 )
 
 type programInputBinding struct {

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/timzifer/modbus_processor/config"
-	"github.com/timzifer/modbus_processor/telemetry"
+	"github.com/timzifer/quarc/config"
+	"github.com/timzifer/quarc/telemetry"
 )
 
 func newTelemetryCollector(cfg config.TelemetryConfig) (telemetry.Collector, error) {

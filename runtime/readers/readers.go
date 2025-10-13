@@ -5,9 +5,9 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/timzifer/modbus_processor/config"
-	"github.com/timzifer/modbus_processor/runtime/activity"
-	"github.com/timzifer/modbus_processor/runtime/state"
+	"github.com/timzifer/quarc/config"
+	"github.com/timzifer/quarc/runtime/activity"
+	"github.com/timzifer/quarc/runtime/state"
 )
 
 // ReadGroup encapsulates a scheduled polling task for a contiguous Modbus data

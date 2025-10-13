@@ -12,14 +12,14 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/timzifer/modbus_processor/config"
-	"github.com/timzifer/modbus_processor/service"
+	"github.com/timzifer/quarc/config"
+	"github.com/timzifer/quarc/service"
 
-	"github.com/timzifer/modbus_processor/internal/logging"
-	"github.com/timzifer/modbus_processor/internal/reload"
-	"github.com/timzifer/modbus_processor/programs"
-	"github.com/timzifer/modbus_processor/serviceio"
-	"github.com/timzifer/modbus_processor/telemetry"
+	"github.com/timzifer/quarc/internal/logging"
+	"github.com/timzifer/quarc/internal/reload"
+	"github.com/timzifer/quarc/programs"
+	"github.com/timzifer/quarc/serviceio"
+	"github.com/timzifer/quarc/telemetry"
 )
 
 // ReloadFunc represents a function that reloads the processor configuration.
