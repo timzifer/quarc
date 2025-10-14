@@ -201,15 +201,15 @@ func (s *Service) delta(now time.Time) time.Duration {
 	return delta
 }
 
-func (s *Service) programPhase(now time.Time, snapshot map[string]*snapshotValue) int {
+func (s *Service) programPhase(ctx context.Context, now time.Time, snapshot map[string]*snapshotValue) int {
 	if len(s.programs) == 0 {
 		return 0
 	}
-	ctx := programs.Context{Now: now, Delta: s.delta(now)}
+	progCtx := programs.Context{Now: now, Delta: s.delta(now)}
 	slots := s.workers.programSlot()
-	errors, _ := runWorkersWithLoad(context.Background(), &s.load.program, slots, s.programs, func(_ context.Context, binding *programBinding) int {
+	errors, _ := runWorkersWithLoad(ctx, &s.load.program, slots, s.programs, func(_ context.Context, binding *programBinding) int {
 		inputs := binding.prepareInputs(snapshot)
-		outputs, err := binding.program.Execute(ctx, inputs)
+		outputs, err := binding.program.Execute(progCtx, inputs)
 		if err != nil {
 			s.logger.Error().Str("program", binding.cfg.ID).Err(err).Msg("program execution failed")
 			binding.invalidateOutputs(now, err)

@@ -376,14 +376,14 @@ func (s *Service) Run(ctx context.Context) error {
 func (s *Service) IterateOnce(ctx context.Context, now time.Time) error {
 	start := time.Now()
 	s.cycleIndex.Add(1)
-	readErrors := s.readPhase(now)
+	readErrors := s.readPhase(ctx, now)
 	var readSnapshot map[string]*snapshotValue
 	if s.snapshots != nil {
 		readSnapshot = s.snapshots.Capture(s.cells)
 	} else {
 		readSnapshot = s.cells.snapshot()
 	}
-	programErrors := s.programPhase(now, readSnapshot)
+	programErrors := s.programPhase(ctx, now, readSnapshot)
 	var programSnapshot map[string]*snapshotValue
 	if s.snapshots != nil {
 		programSnapshot = s.snapshots.Capture(s.cells)
@@ -412,7 +412,7 @@ func (s *Service) IterateOnce(ctx context.Context, now time.Time) error {
 	return nil
 }
 
-func (s *Service) readPhase(now time.Time) int {
+func (s *Service) readPhase(ctx context.Context, now time.Time) int {
 	due := make([]readers.ReadGroup, 0, len(s.reads))
 	for _, group := range s.reads {
 		if group.Due(now) {
@@ -423,7 +423,7 @@ func (s *Service) readPhase(now time.Time) int {
 		return 0
 	}
 	slots := s.workers.readSlot()
-	errors, _ := runWorkersWithLoad(context.Background(), &s.load.read, slots, due, func(_ context.Context, group readers.ReadGroup) int {
+	errors, _ := runWorkersWithLoad(ctx, &s.load.read, slots, due, func(_ context.Context, group readers.ReadGroup) int {
 		return group.Perform(now, s.logger)
 	})
 	return errors
