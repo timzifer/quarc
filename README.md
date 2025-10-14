@@ -73,13 +73,14 @@ Expression ASTs only execute when all declared dependencies exist and are valid.
 
 ## Configuration
 
-Configuration is provided as YAML (see [`config.example.yaml`](config.example.yaml)). Key sections:
+Configuration is expressed in [CUE](https://cuelang.org). Each configuration package exports a top-level `config` value matching `config.Config`. The optional `package` field determines the namespace applied to identifiers. Any `id` or cell reference without a dot is automatically qualified with this package path, so short names stay unambiguous. References that already contain a dot are treated as fully qualified names and are left untouched.
+
+Key sections mirror the previous layout:
 
 * `cycle` – Global cycle time.
-* `modules` – Optional list of additional YAML snippets to load (relative to the parent file). The loader also accepts directories, processing all `*.yaml`/`*.yml` files in lexical order, which makes `config.d`-style setups trivial. Files ending in `.values.yaml`/`.values.yml` are treated as value bundles and skipped automatically when a whole directory is imported.
 * `programs` – Reusable control modules with typed input/output bindings that execute between the read and logic phases.
 * `cells` – Definitions of all local memory cells.
-* `reads` – Block reads referencing a `driver` via the endpoint. Modbus readers still support the legacy top-level fields, while additional driver-specific options can be supplied via `driver_settings`. The bundled `can` driver ingests UDP/TCP byte streams from CAN↔Ethernet controllers and decodes frames according to an external DBC file.
+* `reads` – Block reads referencing a `driver` via the endpoint. The bundled `can` driver ingests UDP/TCP byte streams from CAN↔Ethernet controllers and decodes frames according to an external DBC file.
 * `logic` – Logic blocks with an expression AST, optional `valid`/`quality` expressions and a target cell. Dependencies are automatically discovered from all expressions.
 * `writes` – Write targets referencing a driver identifier. Modbus targets support the existing fields and optional overrides inside `driver_settings`.
 * `logging` / `policies` – Runtime logging setup and optional global policies (retry behaviour, watchdog, readback, etc.). `logging.format` controls the stdout renderer (`json` by default, `text` for human friendly console output).
@@ -87,58 +88,101 @@ Configuration is provided as YAML (see [`config.example.yaml`](config.example.ya
 
 ### Example snippet
 
-```yaml
-logic:
-  - id: heater_control
-    target: heater_command
-    expression: |
-      !value("heater_enabled") ? false :
-      value("alarm_state") ? false :
-      value("pid_output") >= 60 ? true :
-      value("pid_output") <= 40 ? false :
-      heater_command
-    valid: |
-      error == nil ? true : {"valid": false, "code": error_code, "message": error_message}
-    quality: |
-      error == nil ? 1 : 0.95
+```cue
+package plant
+
+config: {
+    package: "plant.core"
+    cycle: "1s"
+    logging: {
+        level: "info"
+        loki: {
+            enabled: false
+            url: ""
+            labels: {}
+        }
+    }
+    telemetry: {
+        enabled: false
+    }
+    cells: [
+        {
+            id: "temperature"
+            type: "number"
+        },
+    ]
+    reads: [
+        {
+            id: "temperature_sensor"
+            endpoint: {
+                address: "192.168.10.10:502"
+                unit_id: 1
+            }
+            function: "holding"
+            start: 0
+            length: 1
+            ttl: "1s"
+            signals: [
+                {
+                    cell: "temperature"
+                    offset: 0
+                    type: "number"
+                    scale: 0.1
+                },
+            ]
+        },
+    ]
+    logic: [
+        {
+            id: "heater_control"
+            target: "heater_command"
+            expression: """
+                !value("heater_enabled") ? false :
+                value("alarm_state") ? false :
+                value("pid_output") >= 60 ? true :
+                value("pid_output") <= 40 ? false :
+                heater_command
+            """
+            valid: """
+                error == nil ? true : {"valid": false, "code": error_code, "message": error_message}
+            """
+            quality: """
+                error == nil ? 1 : 0.95
+            """
+        },
+    ]
+    writes: []
+}
 ```
 
-See the full [`config.example.yaml`](config.example.yaml) for a complete configuration including reads, programs and writes. The configuration loads every module in [`example-config.d`](example-config.d) to showcase each built-in program with runnable input/output bindings.
+Short identifiers such as `temperature` are materialised as `plant.core.temperature` once loaded. To refer to a cell from another package, use its fully qualified name directly.
 
-#### Read configuration examples
+### Templates and reuse
 
-```yaml
-reads:
-  - id: temperature_sensor
-    endpoint:
-      address: "192.168.10.10:502"
-      unit_id: 1
-      driver: modbus
-    function: holding
-    start: 0
-    length: 1
-    ttl: 1s
-    signals:
-      - cell: raw_temperature
-        offset: 0
-        type: number
-        scale: 0.1
-  - id: drivetrain_can
-    endpoint:
-      address: "192.168.10.50:20108"
-      driver: can
-    ttl: 0s
-    driver_settings:
-      protocol: udp
-      dbc: configs/drivetrain.dbc
-      frames:
-        - message: MotorStatus
-          signals:
-            - name: SpeedKph
-              cell: motor_speed
-            - name: WheelError
-              cell: motor_alarm
+CUE definitions replace the previous YAML templates. For example:
+
+```cue
+template: {
+    cell: {
+        id: string
+        type: "number"
+        unit?: string
+    }
+}
+
+config: {
+    cells: [
+        template.cell & { id: "supply_pressure", unit: "bar" },
+        template.cell & { id: "return_pressure", unit: "bar" },
+    ]
+}
 ```
+
+### Splitting configuration files
+
+Place additional `.cue` files in the same directory or import reusable packages. CUE automatically unifies all files that share a package name, so you can organise large installations across multiple files without custom include directives. Namespaces follow the package hierarchy, giving each bundle a natural, collision-free prefix.
+
+See [`config.example.cue`](config.example.cue) for a complete configuration including reads, programs and writes.
 
 ### Reusable programs
 
@@ -149,17 +193,7 @@ Programs encapsulate common control algorithms such as PID regulators, ramp gene
 * `inputs` / `outputs` – Mappings from program signal names to cell IDs. Optional signals can define defaults and type overrides.
 * `settings` – Arbitrary key/value map forwarded to the program factory for tuning parameters.
 
-Programs run before logic evaluation and write directly into the associated cells, making their results available to downstream logic blocks, Modbus writes and the embedded server. Refer to the files in [`example-config.d`](example-config.d) for concrete YAML fragments covering every bundled program.
-
-### Splitting configuration files
-
-Use the `modules` directive to include additional YAML documents from the main configuration. Paths are resolved relative to the parent file, and may reference either files or directories. When a directory is supplied (for example `config.d`), every `.yaml` / `.yml` file is merged in lexical order, allowing you to organise large installations across multiple files without manual concatenation. Files that end in `.values.yaml` / `.values.yml` are skipped automatically – they are only loaded when explicitly referenced from the `values` section.
-
-Values bundles referenced from `values:` **must** use the `.values.yaml` or `.values.yml` suffix so the loader can distinguish them from ordinary modules. Inline mappings remain supported for small pieces of data.
-
-### Schema validation
-
-Machine-readable JSON Schemas are available under [`config/config.schema.json`](config/config.schema.json) and [`config/values.schema.json`](config/values.schema.json). They can be used with editors or CI tooling to validate configuration fragments and value bundles. The configuration schema focuses on structural validation while keeping `additionalProperties` enabled so custom metadata blocks remain possible.
+Programs run before logic evaluation and write directly into the associated cells, making their results available to downstream logic blocks, Modbus writes and the embedded server. See [`config.example.cue`](config.example.cue) for a full configuration that demonstrates the bundled programs and how they are wired.
 
 ### Embedded Modbus server
 
@@ -175,7 +209,7 @@ Trace level logging now provides detailed insights into each READ/PROGRAM/EVAL/C
    ```
 2. Start the processor with your configuration:
    ```bash
-   ./modbus_processor --config path/to/config.yaml
+   ./modbus_processor --config path/to/config.cue
    ```
 
    Use `--config-check` to produce a detailed logic validation report without starting the service, or `--healthcheck` to perform a lightweight configuration validation suitable for Docker health probes.

@@ -1,6 +1,0 @@
-cycle: 500ms
-logging:
-  level: trace
-  format: text
-modules:
-  - "config.d/heating/volumes"
