@@ -3,6 +3,9 @@ package service
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -357,6 +360,207 @@ func TestValidationExpressionValueFunctionAlias(t *testing.T) {
 	}
 	if !decision.valid {
 		t.Fatalf("expected validator to accept value: %+v", decision)
+	}
+}
+
+func TestNormalizeEvaluationError(t *testing.T) {
+	baseErr := evaluationError{Code: "logic.custom", Message: "details"}
+
+	tests := []struct {
+		name string
+		err  error
+		want error
+	}{
+		{name: "nil", err: nil, want: nil},
+		{name: "evaluation_error", err: baseErr, want: baseErr},
+		{name: "wrapped_evaluation_error", err: fmt.Errorf("wrap: %w", baseErr), want: baseErr},
+		{name: "generic_error", err: errors.New("boom"), want: evaluationError{Code: "logic.runtime_error", Message: "boom"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := normalizeEvaluationError(tc.err)
+			if tc.want == nil {
+				if got != nil {
+					t.Fatalf("normalizeEvaluationError(%v) = %v, want nil", tc.err, got)
+				}
+				return
+			}
+
+			var eval evaluationError
+			if !errors.As(tc.want, &eval) {
+				eval = tc.want.(evaluationError)
+			}
+
+			gotEval, ok := got.(evaluationError)
+			if !ok {
+				t.Fatalf("normalizeEvaluationError(%v) = %T, want evaluationError", tc.err, got)
+			}
+			if gotEval.Code != eval.Code || gotEval.Message != eval.Message {
+				t.Fatalf("normalizeEvaluationError(%v) = %+v, want %+v", tc.err, gotEval, eval)
+			}
+		})
+	}
+}
+
+func TestDefaultValidation(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		res := defaultValidation(nil)
+		if !res.valid {
+			t.Fatalf("expected valid result")
+		}
+		if res.quality == nil || *res.quality != 1 {
+			t.Fatalf("expected full quality, got %+v", res.quality)
+		}
+	})
+
+	t.Run("evaluation_error", func(t *testing.T) {
+		eval := evaluationError{Code: "logic.invalid", Message: "bad"}
+		res := defaultValidation(eval)
+		if res.valid || res.code != eval.Code || res.message != eval.Message {
+			t.Fatalf("unexpected result: %+v", res)
+		}
+	})
+
+	t.Run("generic_error", func(t *testing.T) {
+		err := errors.New("boom")
+		res := defaultValidation(err)
+		if res.valid || res.code != "logic.error" || res.message != err.Error() {
+			t.Fatalf("unexpected result: %+v", res)
+		}
+	})
+}
+
+func TestBuildErrorInfo(t *testing.T) {
+	if info := buildErrorInfo(nil); info != nil {
+		t.Fatalf("expected nil for nil error, got %v", info)
+	}
+
+	eval := evaluationError{Code: "logic.bad", Message: "fail"}
+	info := buildErrorInfo(eval)
+	if info["message"] != eval.Message {
+		t.Fatalf("expected message %q, got %v", eval.Message, info["message"])
+	}
+	if info["code"] != eval.Code {
+		t.Fatalf("expected code %q, got %v", eval.Code, info["code"])
+	}
+
+	noCode := evaluationError{Message: "just message"}
+	info = buildErrorInfo(noCode)
+	if _, ok := info["code"]; ok {
+		t.Fatalf("did not expect code in %+v", info)
+	}
+
+	generic := errors.New("boom")
+	info = buildErrorInfo(generic)
+	if info["message"] != generic.Error() {
+		t.Fatalf("expected message %q, got %v", generic.Error(), info["message"])
+	}
+	if _, ok := info["code"]; ok {
+		t.Fatalf("did not expect code for generic error")
+	}
+}
+
+func TestApplyValidationOutcome(t *testing.T) {
+	base := validationResult{valid: false}
+
+	res := applyValidationOutcome(base, true)
+	if !res.valid {
+		t.Fatalf("expected valid=true, got %+v", res)
+	}
+
+	res = applyValidationOutcome(base, "no")
+	if res.valid {
+		t.Fatalf("expected valid=false for \"no\", got %+v", res)
+	}
+
+	unchanged := applyValidationOutcome(base, 123)
+	if unchanged.valid != base.valid {
+		t.Fatalf("expected unchanged result, got %+v", unchanged)
+	}
+
+	if got := applyValidationOutcome(base, nil); got != base {
+		t.Fatalf("expected base unchanged for nil outcome")
+	}
+}
+
+func TestApplyValidationMap(t *testing.T) {
+	base := validationResult{valid: true, quality: floatPtr(0.5)}
+
+	values := map[string]interface{}{
+		"valid":   "false",
+		"quality": "0.75",
+		"code":    42,
+		"message": "problem",
+		"ignored": "value",
+	}
+
+	res := applyValidationMap(base, values)
+	if res.valid {
+		t.Fatalf("expected valid=false after map, got %+v", res)
+	}
+	if res.quality == nil || *res.quality != 0.75 {
+		t.Fatalf("expected quality=0.75, got %+v", res.quality)
+	}
+	if res.code != "42" {
+		t.Fatalf("expected code \"42\", got %q", res.code)
+	}
+	if res.message != "problem" {
+		t.Fatalf("expected message \"problem\", got %q", res.message)
+	}
+
+	invalid := applyValidationMap(base, map[string]interface{}{"quality": "not a number"})
+	if invalid.quality == nil || *invalid.quality != *base.quality {
+		t.Fatalf("expected quality unchanged, got %+v", invalid.quality)
+	}
+}
+
+func TestToBool(t *testing.T) {
+	cases := []struct {
+		name  string
+		input interface{}
+		want  bool
+		ok    bool
+	}{
+		{name: "bool_true", input: true, want: true, ok: true},
+		{name: "bool_false", input: false, want: false, ok: true},
+		{name: "string_yes", input: "Yes", want: true, ok: true},
+		{name: "string_zero", input: "0", want: false, ok: true},
+		{name: "unknown", input: 1, want: false, ok: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := toBool(tc.input)
+			if got != tc.want || ok != tc.ok {
+				t.Fatalf("toBool(%v) = (%v, %v), want (%v, %v)", tc.input, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+func TestToFloat(t *testing.T) {
+	cases := []struct {
+		name  string
+		input interface{}
+		want  float64
+		ok    bool
+	}{
+		{name: "float64", input: 1.25, want: 1.25, ok: true},
+		{name: "int", input: int32(3), want: 3, ok: true},
+		{name: "uint", input: uint16(7), want: 7, ok: true},
+		{name: "string", input: " 2.5 ", want: 2.5, ok: true},
+		{name: "empty_string", input: " ", want: 0, ok: false},
+		{name: "invalid", input: struct{}{}, want: 0, ok: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := toFloat(tc.input)
+			if math.Abs(got-tc.want) > 1e-9 || ok != tc.ok {
+				t.Fatalf("toFloat(%v) = (%v, %v), want (%v, %v)", tc.input, got, ok, tc.want, tc.ok)
+			}
+		})
 	}
 }
 
