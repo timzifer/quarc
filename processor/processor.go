@@ -209,12 +209,7 @@ func (p *Processor) Run(ctx context.Context) error {
 	}
 
 	defer func() {
-		p.mu.Lock()
-		p.running = false
-		if p.current == current {
-			p.current = nil
-		}
-		p.mu.Unlock()
+		p.markStopped(current)
 	}()
 
 	for {
@@ -235,13 +230,18 @@ func (p *Processor) Run(ctx context.Context) error {
 				err := <-errCh
 				current.srv.Close()
 				current.cleanup()
+				exitErr := ctx.Err()
 				if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
-					return err
+					exitErr = err
 				}
-				return ctx.Err()
+				p.markStopped(current)
+				p.drainReloadRequests(reloadCh, exitErr)
+				return exitErr
 			case err := <-errCh:
 				current.srv.Close()
 				current.cleanup()
+				p.markStopped(current)
+				p.drainReloadRequests(reloadCh, err)
 				return err
 			case req := <-reloadCh:
 				cfg, err := p.loadConfig()
@@ -251,7 +251,7 @@ func (p *Processor) Run(ctx context.Context) error {
 					}
 					continue
 				}
-				if err := service.Validate(cfg, current.logger); err != nil {
+				if err := service.Validate(cfg, current.logger, p.serviceOptions...); err != nil {
 					current.logger.Error().Err(err).Msg("reloaded configuration invalid")
 					if req.done != nil {
 						req.done <- err
@@ -275,7 +275,7 @@ func (p *Processor) Run(ctx context.Context) error {
 					current.logger.Error().Err(err).Msg("failed to reload configuration")
 					continue
 				}
-				if err := service.Validate(cfg, current.logger); err != nil {
+				if err := service.Validate(cfg, current.logger, p.serviceOptions...); err != nil {
 					current.logger.Error().Err(err).Msg("reloaded configuration invalid")
 					continue
 				}
@@ -341,7 +341,7 @@ func (p *Processor) Reload(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if err := service.Validate(cfg, zerolog.Nop()); err != nil {
+		if err := service.Validate(cfg, zerolog.Nop(), p.serviceOptions...); err != nil {
 			return err
 		}
 		return p.swapRuntime(cfg)
@@ -387,9 +387,16 @@ func (p *Processor) swapRuntime(cfg *config.Config) error {
 
 	p.mu.Lock()
 	old := p.current
+	prevCfg := p.config
+	prevWatcher := p.watcher
 	p.current = runtime
 	p.config = cfg
 	err = p.initWatcher(cfg)
+	if err != nil {
+		p.current = old
+		p.config = prevCfg
+		p.watcher = prevWatcher
+	}
 	p.mu.Unlock()
 	if err != nil {
 		runtime.srv.Close()
@@ -516,6 +523,31 @@ func listenAddress(host string, port int) string {
 		return host
 	}
 	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+func (p *Processor) markStopped(expected *runtimeState) {
+	p.mu.Lock()
+	if p.current == expected {
+		p.current = nil
+	}
+	p.running = false
+	p.mu.Unlock()
+}
+
+func (p *Processor) drainReloadRequests(reloadCh chan reloadRequest, err error) {
+	if reloadCh == nil {
+		return
+	}
+	for {
+		select {
+		case req := <-reloadCh:
+			if req.done != nil {
+				req.done <- err
+			}
+		default:
+			return
+		}
+	}
 }
 
 func tickChannel(t *time.Ticker) <-chan time.Time {
