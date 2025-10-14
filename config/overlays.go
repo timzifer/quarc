@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -15,6 +16,12 @@ var (
 	overlays  = make(map[string]load.Source)
 )
 
+// OverlayDescriptor describes a virtual CUE file that can be registered as an overlay.
+type OverlayDescriptor struct {
+	Path   string
+	Source load.Source
+}
+
 // RegisterOverlay registers a virtual CUE file that can be loaded via load.Config overlays.
 func RegisterOverlay(path string, src load.Source) error {
 	normalized, err := normalizeOverlayPath(path)
@@ -25,8 +32,11 @@ func RegisterOverlay(path string, src load.Source) error {
 		return errors.New("overlay source must not be nil")
 	}
 	overlayMu.Lock()
+	defer overlayMu.Unlock()
+	if _, exists := overlays[normalized]; exists {
+		return fmt.Errorf("overlay %s already registered", normalized)
+	}
 	overlays[normalized] = src
-	overlayMu.Unlock()
 	return nil
 }
 
@@ -69,8 +79,28 @@ func ResolveOverlays(baseDir string) map[string]load.Source {
 	return resolved
 }
 
-func resetOverlaysForTest() {
+// RegisterOverlayDescriptor registers an overlay described by the provided descriptor.
+func RegisterOverlayDescriptor(desc OverlayDescriptor) error {
+	return RegisterOverlay(desc.Path, desc.Source)
+}
+
+// RegisterOverlayDescriptors registers all provided overlay descriptors.
+func RegisterOverlayDescriptors(descs ...OverlayDescriptor) error {
+	for _, desc := range descs {
+		if err := RegisterOverlayDescriptor(desc); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ResetOverlaysForTest clears the overlay registry. This helper is intended for tests only.
+func ResetOverlaysForTest() {
 	overlayMu.Lock()
 	overlays = make(map[string]load.Source)
 	overlayMu.Unlock()
+}
+
+func resetOverlaysForTest() {
+	ResetOverlaysForTest()
 }
