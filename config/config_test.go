@@ -245,6 +245,60 @@ config: {
 	}
 }
 
+func TestLoadConfigWithOverlay(t *testing.T) {
+	resetOverlaysForTest()
+	t.Cleanup(resetOverlaysForTest)
+
+	dir := t.TempDir()
+	overlayContent := `package overlay
+
+config: {
+    package: "overlay.test"
+    cycle: "1s"
+` + baseSections + `
+    cells: [{
+        id: "virtual"
+        type: "number"
+    }]
+    reads: []
+    writes: []
+}
+`
+
+	if err := RegisterOverlayString("config.cue", overlayContent); err != nil {
+		t.Fatalf("register overlay: %v", err)
+	}
+
+	path := filepath.Join(dir, "config.cue")
+	content := `package overlay
+
+config: {
+    package: "overlay.test"
+    cycle: "1s"
+` + baseSections + `
+    cells: []
+    reads: []
+    writes: []
+}
+`
+
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.Cells) != 1 {
+		t.Fatalf("expected 1 cell, got %d", len(cfg.Cells))
+	}
+	cell := cfg.Cells[0]
+	if cell.ID != "overlay.test.virtual" {
+		t.Fatalf("expected namespaced cell from overlay, got %q", cell.ID)
+	}
+}
+
 func TestDirectoryMerge(t *testing.T) {
 	dir := t.TempDir()
 

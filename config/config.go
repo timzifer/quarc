@@ -359,8 +359,11 @@ func Load(path string) (*Config, error) {
 }
 
 func buildInstance(dir, target string) (*cue.Instance, error) {
-	cfg := &load.Config{Dir: dir}
-	instances := load.Instances([]string{target}, cfg)
+        cfg := &load.Config{Dir: dir}
+        if overlays := ResolveOverlays(dir); len(overlays) > 0 {
+                cfg.Overlay = overlays
+        }
+        instances := load.Instances([]string{target}, cfg)
 	if len(instances) == 0 {
 		return nil, fmt.Errorf("no CUE packages found in %s", dir)
 	}
