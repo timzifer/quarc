@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	overlayMu sync.RWMutex
-	overlays  = make(map[string]load.Source)
+	overlayMu                   sync.RWMutex
+	overlays                    = make(map[string]load.Source)
+	defaultOverlayRegistrations []func() error
 )
 
 // OverlayDescriptor describes a virtual CUE file that can be registered as an overlay.
@@ -98,9 +99,29 @@ func RegisterOverlayDescriptors(descs ...OverlayDescriptor) error {
 func ResetOverlaysForTest() {
 	overlayMu.Lock()
 	overlays = make(map[string]load.Source)
+	registrations := append([]func() error(nil), defaultOverlayRegistrations...)
 	overlayMu.Unlock()
+
+	for _, register := range registrations {
+		if err := register(); err != nil {
+			panic(fmt.Sprintf("restore default overlay: %v", err))
+		}
+	}
 }
 
 func resetOverlaysForTest() {
 	ResetOverlaysForTest()
+}
+
+// RegisterDefaultOverlay registers an overlay that should persist across test resets.
+func RegisterDefaultOverlay(register func() error) {
+	if register == nil {
+		panic("default overlay registration must not be nil")
+	}
+	if err := register(); err != nil {
+		panic(fmt.Sprintf("register default overlay: %v", err))
+	}
+	overlayMu.Lock()
+	defaultOverlayRegistrations = append(defaultOverlayRegistrations, register)
+	overlayMu.Unlock()
 }

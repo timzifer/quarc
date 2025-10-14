@@ -2,11 +2,38 @@ package programs
 
 import (
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/timzifer/quarc/config"
 )
+
+const rampOverlayBaseSections = `
+    logging: {
+        level: "info"
+        loki: {
+            enabled: false
+            url: ""
+            labels: {}
+        }
+    }
+    telemetry: {
+        enabled: false
+    }
+    workers: {}
+    helpers: []
+    dsl: {}
+    live_view: {}
+    policies: {}
+    server: {
+        enabled: false
+        listen: ""
+        cells: []
+    }
+    hot_reload: false
+`
 
 func mustExecute(t *testing.T, prog Program, ctx Context, signals []Signal) []Signal {
 	t.Helper()
@@ -15,6 +42,113 @@ func mustExecute(t *testing.T, prog Program, ctx Context, signals []Signal) []Si
 		t.Fatalf("execute: %v", err)
 	}
 	return out
+}
+
+func TestRampOverlayIntegration(t *testing.T) {
+	config.ResetOverlaysForTest()
+	t.Cleanup(config.ResetOverlaysForTest)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ramp_module.cue")
+	content := `package overlaytest
+
+import (
+    module "quarc.dev/quarc/module"
+    ramp "quarc.dev/quarc/programs/ramp"
+)
+
+instance: module.#Module & ramp.#Ramp & {
+    config: {
+        package: "overlay.test"
+        cycle: "1s"
+` + rampOverlayBaseSections + `
+        reads: []
+        writes: []
+        logic: []
+        cells: [
+            { id: "target", type: "number" },
+            { id: "output", type: "number" },
+        ]
+        programs: [{
+            id: "ramp1"
+            type: "ramp"
+            inputs: [{
+                id: "target"
+                cell: "target"
+            }]
+            outputs: [{
+                id: "value"
+                cell: "output"
+            }]
+            settings: {
+                rate: 1.5
+                initial: 0.5
+                allow_hold: true
+            }
+        }]
+    }
+}
+
+config: instance.config
+`
+
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write overlay config: %v", err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load overlay config: %v", err)
+	}
+
+	if len(cfg.Cells) != 2 {
+		t.Fatalf("expected 2 cells, got %d", len(cfg.Cells))
+	}
+
+	seenCells := map[string]bool{
+		"overlay.test.target": false,
+		"overlay.test.output": false,
+	}
+	for _, cell := range cfg.Cells {
+		if _, ok := seenCells[cell.ID]; ok {
+			seenCells[cell.ID] = true
+		}
+	}
+	for id, seen := range seenCells {
+		if !seen {
+			t.Fatalf("expected cell %s to be present", id)
+		}
+	}
+
+	if len(cfg.Programs) != 1 {
+		t.Fatalf("expected 1 program, got %d", len(cfg.Programs))
+	}
+	prog := cfg.Programs[0]
+	if prog.Type != "ramp" {
+		t.Fatalf("expected program type ramp, got %s", prog.Type)
+	}
+	if len(prog.Outputs) != 1 {
+		t.Fatalf("expected 1 output, got %d", len(prog.Outputs))
+	}
+	if prog.Outputs[0].Cell != "overlay.test.output" {
+		t.Fatalf("expected output cell overlay.test.output, got %s", prog.Outputs[0].Cell)
+	}
+	if len(prog.Inputs) != 1 {
+		t.Fatalf("expected 1 input, got %d", len(prog.Inputs))
+	}
+	if prog.Inputs[0].Cell != "overlay.test.target" {
+		t.Fatalf("expected input cell overlay.test.target, got %s", prog.Inputs[0].Cell)
+	}
+
+	if rate, ok := prog.Settings["rate"].(float64); !ok || rate != 1.5 {
+		t.Fatalf("expected rate 1.5, got %v", prog.Settings["rate"])
+	}
+	if initial, ok := prog.Settings["initial"].(float64); !ok || initial != 0.5 {
+		t.Fatalf("expected initial 0.5, got %v", prog.Settings["initial"])
+	}
+	if allowHold, ok := prog.Settings["allow_hold"].(bool); !ok || !allowHold {
+		t.Fatalf("expected allow_hold true, got %v", prog.Settings["allow_hold"])
+	}
 }
 
 func TestPIDProgram(t *testing.T) {
