@@ -30,15 +30,21 @@ type Option func(*settings) error
 
 // ProgramDefinition describes a program factory that should be registered before startup.
 type ProgramDefinition struct {
-	ID      string
-	Factory programs.Factory
+	ID       string
+	Factory  programs.Factory
+	Overlays []config.OverlayDescriptor
+
+	overlaysRegistered bool
 }
 
 // IOServiceDefinition bundles optional reader and writer factories under a driver identifier.
 type IOServiceDefinition struct {
-	Driver string
-	Reader serviceio.ReaderFactory
-	Writer serviceio.WriterFactory
+	Driver   string
+	Reader   serviceio.ReaderFactory
+	Writer   serviceio.WriterFactory
+	Overlays []config.OverlayDescriptor
+
+	overlaysRegistered bool
 }
 
 type settings struct {
