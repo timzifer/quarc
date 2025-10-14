@@ -262,16 +262,11 @@ func New(cfg *config.Config, logger zerolog.Logger, opts ...Option) (*Service, e
 		return nil, err
 	}
 	svc.writes = writes
-	var srv *modbusServer
-	if cfg.Server.Enabled {
-		serverLogger := logger.With().Str("component", "modbus_server").Logger()
-		srv, err = newModbusServer(cfg.Server, cells, serverLogger)
-		if err != nil {
-			return nil, err
-		}
-	}
-	svc.server = srv
-	return svc, nil
+        if cfg.Server.Enabled {
+                logger.Warn().Str("component", "modbus_server").Msg("embedded Modbus server configuration detected but ignored")
+        }
+        svc.server = nil
+        return svc, nil
 }
 
 func buildReadGroups(cfgs []config.ReadGroupConfig, deps readers.ReaderDependencies, factories map[string]readers.ReaderFactory) ([]readers.ReadGroup, error) {
@@ -348,12 +343,10 @@ func Validate(cfg *config.Config, logger zerolog.Logger, opts ...Option) error {
 	if _, err := buildWriteTargets(cfg.Writes, writers.WriterDependencies{Cells: cells}, registry.writers); err != nil {
 		return err
 	}
-	if cfg.Server.Enabled {
-		if _, _, err := prepareServer(cfg.Server, cells); err != nil {
-			return err
-		}
-	}
-	return nil
+        if cfg.Server.Enabled {
+                logger.Warn().Str("component", "modbus_server").Msg("embedded Modbus server configuration detected but ignored")
+        }
+        return nil
 }
 
 // Run executes the controller loop until the context is cancelled.
@@ -390,17 +383,13 @@ func (s *Service) IterateOnce(ctx context.Context, now time.Time) error {
 	} else {
 		programSnapshot = s.cells.snapshot()
 	}
-	evalErrors := s.evalPhase(now, programSnapshot)
-	var executeSnapshot map[string]*snapshotValue
-	if s.snapshots != nil {
-		executeSnapshot = s.snapshots.Capture(s.cells)
-	} else {
-		executeSnapshot = s.cells.snapshot()
-	}
-	writeErrors := s.commitPhase(ctx, now)
-	if s.server != nil {
-		s.server.refresh(executeSnapshot)
-	}
+        evalErrors := s.evalPhase(now, programSnapshot)
+        if s.snapshots != nil {
+                s.snapshots.Capture(s.cells)
+        } else {
+                s.cells.snapshot()
+        }
+        writeErrors := s.commitPhase(ctx, now)
 
 	s.metrics.CycleCount++
 	s.metrics.LastDuration = time.Since(start)
@@ -713,9 +702,12 @@ func (s *Service) Close() error {
 	for _, target := range s.writes {
 		target.Close()
 	}
-	if s.server != nil {
-		s.server.close()
-	}
+        if s.server != nil {
+                // Legacy embedded Modbus server support has been removed, but we
+                // keep the shutdown call to guard against third-party extensions
+                // that might still register a server implementation.
+                s.server.close()
+        }
 	if s.liveView != nil {
 		s.liveView.close()
 	}
@@ -723,14 +715,19 @@ func (s *Service) Close() error {
 }
 
 // ServerAddress returns the listen address of the embedded Modbus server, if enabled.
+//
+// Deprecated: The embedded Modbus server has been removed. The method now
+// returns an empty string and will disappear in a future release.
 func (s *Service) ServerAddress() string {
-	if s.server == nil {
-		return ""
-	}
-	return s.server.addr()
+        if s == nil {
+                return ""
+        }
+        return ""
 }
 
-// SetCellValue applies a manual override to the specified cell.
+// SetCellValue applies a manual override to the specified cell. Overrides are
+// visible to logic immediately and exported once downstream drivers publish
+// their next snapshot.
 func (s *Service) SetCellValue(id string, value interface{}) error {
 	if s == nil {
 		return errors.New("service is nil")
@@ -743,10 +740,9 @@ func (s *Service) SetCellValue(id string, value interface{}) error {
 	if err := cell.setValue(value, now, nil); err != nil {
 		return err
 	}
-	if s.server != nil {
-		s.server.refresh(s.cells.snapshot())
-	}
-	return nil
+        // Legacy Modbus server refreshes are intentionally omitted – overrides are
+        // picked up by drivers on their next publish cycle.
+        return nil
 }
 
 // InvalidateCell marks the specified cell invalid with an optional diagnostic code/message.
@@ -760,10 +756,9 @@ func (s *Service) InvalidateCell(id, code, message string) error {
 	}
 	now := time.Now()
 	cell.markInvalid(now, code, message)
-	if s.server != nil {
-		s.server.refresh(s.cells.snapshot())
-	}
-	return nil
+        // Legacy Modbus server refreshes are intentionally omitted – diagnostics
+        // propagate via snapshots that drivers publish on their own cadence.
+        return nil
 }
 
 // InspectCell returns the current state of the requested cell.

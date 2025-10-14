@@ -1,12 +1,11 @@
 package service
 
 import (
-	"context"
-	"encoding/binary"
-	"fmt"
-	"io"
-	"net"
-	"strings"
+        "context"
+        "encoding/binary"
+        "fmt"
+        "io"
+        "strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -510,165 +509,12 @@ func TestCycleDetection(t *testing.T) {
 	}
 }
 
-func TestServiceCloseShutsDownServerConnections(t *testing.T) {
-	cfg := &config.Config{
-		Cycle: config.Duration{Duration: time.Millisecond},
-		Cells: []config.CellConfig{{ID: "foo", Type: config.ValueKindNumber}},
-		Server: config.ServerConfig{
-			Enabled: true,
-			Listen:  "127.0.0.1:0",
-			Cells: []config.ServerCellConfig{{
-				Cell:    "foo",
-				Address: 0,
-			}},
-		},
-	}
-
-	logger := zerolog.New(io.Discard)
-	svc, err := New(cfg, logger)
-	if err != nil {
-		t.Fatalf("new service: %v", err)
-	}
-
-	addr := svc.ServerAddress()
-	if addr == "" {
-		t.Fatalf("expected server address")
-	}
-
-	conn, err := net.DialTimeout("tcp", addr, time.Second)
-	if err != nil {
-		t.Fatalf("dial modbus server: %v", err)
-	}
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		if err := svc.Close(); err != nil {
-			t.Errorf("service close: %v", err)
-		}
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("service close timed out")
-	}
-
-	_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-	buf := make([]byte, 1)
-	if _, err := conn.Read(buf); err == nil {
-		t.Fatalf("expected connection to be closed")
-	}
-	_ = conn.Close()
-}
-
-func TestModbusServerExposesCells(t *testing.T) {
-	cfg := &config.Config{
-		Cycle: config.Duration{Duration: time.Millisecond},
-		Cells: []config.CellConfig{
-			{ID: "number", Type: config.ValueKindNumber},
-			{ID: "flag", Type: config.ValueKindBool},
-		},
-		Server: config.ServerConfig{
-			Enabled: true,
-			Listen:  "127.0.0.1:0",
-			UnitID:  1,
-			Cells: []config.ServerCellConfig{
-				{Cell: "number", Address: 0, Scale: 0.1},
-				{Cell: "flag", Address: 1},
-			},
-		},
-	}
-
-	logger := zerolog.New(io.Discard)
-	svc, err := New(cfg, logger)
-	if err != nil {
-		t.Fatalf("new service: %v", err)
-	}
-	defer svc.Close()
-
-	numberCell, err := svc.cells.mustGet("number")
-	if err != nil {
-		t.Fatalf("get number cell: %v", err)
-	}
-	if err := numberCell.setValue(float64(12.3), time.Now(), nil); err != nil {
-		t.Fatalf("set number value: %v", err)
-	}
-	flagCell, err := svc.cells.mustGet("flag")
-	if err != nil {
-		t.Fatalf("get flag cell: %v", err)
-	}
-	if err := flagCell.setValue(true, time.Now(), nil); err != nil {
-		t.Fatalf("set flag value: %v", err)
-	}
-
-	if err := svc.IterateOnce(context.Background(), time.Now()); err != nil {
-		t.Fatalf("iterate: %v", err)
-	}
-
-	addr := svc.ServerAddress()
-	if addr == "" {
-		t.Fatalf("expected server address")
-	}
-	conn, err := net.DialTimeout("tcp", addr, time.Second)
-	if err != nil {
-		t.Fatalf("dial server: %v", err)
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
-
-	request := make([]byte, 12)
-	binary.BigEndian.PutUint16(request[0:2], 1)
-	binary.BigEndian.PutUint16(request[2:4], 0)
-	binary.BigEndian.PutUint16(request[4:6], 6)
-	request[6] = 1
-	request[7] = 0x04
-	binary.BigEndian.PutUint16(request[8:10], 0)
-	binary.BigEndian.PutUint16(request[10:12], 2)
-
-	if _, err := conn.Write(request); err != nil {
-		t.Fatalf("write request: %v", err)
-	}
-
-	header := make([]byte, 7)
-	if _, err := io.ReadFull(conn, header); err != nil {
-		t.Fatalf("read header: %v", err)
-	}
-	if header[6] != 1 {
-		t.Fatalf("unexpected unit id: %d", header[6])
-	}
-	length := int(binary.BigEndian.Uint16(header[4:6]))
-	if length <= 1 {
-		t.Fatalf("invalid length: %d", length)
-	}
-	pdu := make([]byte, length-1)
-	if _, err := io.ReadFull(conn, pdu); err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	if pdu[0] != 0x04 {
-		t.Fatalf("unexpected function code: %d", pdu[0])
-	}
-	if pdu[1] != 4 {
-		t.Fatalf("unexpected byte count: %d", pdu[1])
-	}
-	if len(pdu) != 6 {
-		t.Fatalf("unexpected pdu length: %d", len(pdu))
-	}
-	numberValue := binary.BigEndian.Uint16(pdu[2:4])
-	flagValue := binary.BigEndian.Uint16(pdu[4:6])
-	if numberValue != 123 {
-		t.Fatalf("expected number register 123, got %d", numberValue)
-	}
-	if flagValue != 1 {
-		t.Fatalf("expected flag register 1, got %d", flagValue)
-	}
-}
 
 func TestServiceManualCellOperations(t *testing.T) {
-	cfg := &config.Config{
-		Cycle: config.Duration{Duration: time.Millisecond},
-		Cells: []config.CellConfig{{ID: "manual", Type: config.ValueKindNumber}},
-	}
+        cfg := &config.Config{
+                Cycle: config.Duration{Duration: time.Millisecond},
+                Cells: []config.CellConfig{{ID: "manual", Type: config.ValueKindNumber}},
+        }
 	logger := zerolog.New(io.Discard)
 	svc, err := New(cfg, logger)
 	if err != nil {
@@ -697,11 +543,11 @@ func TestServiceManualCellOperations(t *testing.T) {
 		t.Fatalf("unexpected diagnosis: %+v", state.Diagnosis)
 	}
 
-	if err := svc.InvalidateCell("manual", "manual.override", "forced invalid"); err != nil {
-		t.Fatalf("invalidate cell: %v", err)
-	}
+        if err := svc.InvalidateCell("manual", "manual.override", "forced invalid"); err != nil {
+                t.Fatalf("invalidate cell: %v", err)
+        }
 
-	state, err = svc.InspectCell("manual")
+        state, err = svc.InspectCell("manual")
 	if err != nil {
 		t.Fatalf("inspect cell after invalidate: %v", err)
 	}
@@ -713,7 +559,41 @@ func TestServiceManualCellOperations(t *testing.T) {
 	}
 	if state.Diagnosis.Message != "forced invalid" {
 		t.Fatalf("unexpected diagnosis message: %v", state.Diagnosis.Message)
-	}
+        }
+}
+
+func TestServerConfigIgnored(t *testing.T) {
+        cfg := &config.Config{
+                Cells: []config.CellConfig{{ID: "value", Type: config.ValueKindNumber}},
+                Server: config.ServerConfig{
+                        Enabled: true,
+                        Listen:  "127.0.0.1:0",
+                        UnitID:  1,
+                        Cells: []config.ServerCellConfig{{Cell: "value", Address: 0}},
+                },
+        }
+        logger := zerolog.New(io.Discard)
+
+        if err := Validate(cfg, logger); err != nil {
+                t.Fatalf("validate config with legacy server: %v", err)
+        }
+
+        svc, err := New(cfg, logger)
+        if err != nil {
+                t.Fatalf("new service: %v", err)
+        }
+        defer svc.Close()
+
+        if addr := svc.ServerAddress(); addr != "" {
+                t.Fatalf("expected legacy server address to be empty, got %q", addr)
+        }
+
+        if err := svc.SetCellValue("value", 123.4); err != nil {
+                t.Fatalf("set cell value: %v", err)
+        }
+        if err := svc.InvalidateCell("value", "legacy.server", "ignored"); err != nil {
+                t.Fatalf("invalidate cell: %v", err)
+        }
 }
 
 func TestServiceClosesRemoteClients(t *testing.T) {
@@ -786,79 +666,6 @@ func TestServiceClosesRemoteClients(t *testing.T) {
 	}
 }
 
-func TestSetCellValueUpdatesServerImmediately(t *testing.T) {
-	cfg := &config.Config{
-		Cells: []config.CellConfig{{ID: "number", Type: config.ValueKindNumber}},
-		Server: config.ServerConfig{
-			Enabled: true,
-			Listen:  "127.0.0.1:0",
-			UnitID:  1,
-			Cells: []config.ServerCellConfig{{
-				Cell:    "number",
-				Address: 0,
-				Scale:   0.1,
-			}},
-		},
-	}
-	logger := zerolog.New(io.Discard)
-	svc, err := New(cfg, logger)
-	if err != nil {
-		t.Fatalf("new service: %v", err)
-	}
-	defer svc.Close()
-
-	if err := svc.SetCellValue("number", 12.3); err != nil {
-		t.Fatalf("set cell value: %v", err)
-	}
-
-	addr := svc.ServerAddress()
-	if addr == "" {
-		t.Fatalf("expected server address")
-	}
-
-	conn, err := net.DialTimeout("tcp", addr, time.Second)
-	if err != nil {
-		t.Fatalf("dial server: %v", err)
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
-
-	request := make([]byte, 12)
-	binary.BigEndian.PutUint16(request[0:2], 1)
-	binary.BigEndian.PutUint16(request[2:4], 0)
-	binary.BigEndian.PutUint16(request[4:6], 6)
-	request[6] = 1
-	request[7] = 0x04
-	binary.BigEndian.PutUint16(request[8:10], 0)
-	binary.BigEndian.PutUint16(request[10:12], 1)
-
-	if _, err := conn.Write(request); err != nil {
-		t.Fatalf("write request: %v", err)
-	}
-
-	header := make([]byte, 7)
-	if _, err := io.ReadFull(conn, header); err != nil {
-		t.Fatalf("read header: %v", err)
-	}
-	length := int(binary.BigEndian.Uint16(header[4:6]))
-	if length <= 1 {
-		t.Fatalf("invalid length: %d", length)
-	}
-	pdu := make([]byte, length-1)
-	if _, err := io.ReadFull(conn, pdu); err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	if pdu[0] != 0x04 {
-		t.Fatalf("unexpected function code: %d", pdu[0])
-	}
-	if pdu[1] != 2 {
-		t.Fatalf("unexpected byte count: %d", pdu[1])
-	}
-	value := binary.BigEndian.Uint16(pdu[2:4])
-	if value != 123 {
-		t.Fatalf("expected register value 123, got %d", value)
-	}
-}
 
 func TestNewProgramBindingsDetectsDuplicateOutputs(t *testing.T) {
 	logger := zerolog.New(io.Discard)

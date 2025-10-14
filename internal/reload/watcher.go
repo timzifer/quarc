@@ -1,11 +1,12 @@
 package reload
 
 import (
-	"os"
-	"path/filepath"
-	"sort"
-	"sync"
-	"time"
+        "os"
+        "path/filepath"
+        "sort"
+        "strings"
+        "sync"
+        "time"
 
 	config2 "github.com/timzifer/quarc/config"
 )
@@ -89,15 +90,16 @@ func (w *Watcher) Check() ([]string, error) {
 func uniquePaths(paths []string) []string {
 	seen := make(map[string]struct{}, len(paths))
 	result := make([]string, 0, len(paths))
-	for _, path := range paths {
-		if path == "" {
-			continue
-		}
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		result = append(result, path)
-	}
-	return result
+        for _, path := range paths {
+                trimmed := strings.TrimSpace(path)
+                if trimmed == "" {
+                        continue
+                }
+                if _, ok := seen[trimmed]; ok {
+                        continue
+                }
+                seen[trimmed] = struct{}{}
+                result = append(result, trimmed)
+        }
+        return result
 }

@@ -1,14 +1,16 @@
 # QUARC (Quadriphasic Automation Runtime Controller)
 
-A deterministic, cyclic Modbus controller that executes four strictly separated phases – **READ**, **PROGRAM**, **EVAL** and **COMMIT** – on a fixed schedule. The controller ingests Modbus registers in blocks, stores them in typed in-memory cells, lets reusable control programs derive new signals, evaluates expression-based logic with optional validation expressions and finally commits changes back to Modbus targets using a write-on-change strategy.
+A deterministic, cyclic automation runtime that executes four strictly separated phases – **READ**, **PROGRAM**, **EVAL** and **COMMIT** – on a fixed schedule. The controller stores typed in-memory cells, lets reusable control programs derive new signals, evaluates expression-based logic with optional validation expressions and finally commits changes back to configured outputs using a write-on-change strategy.
+
+QUARC is transport agnostic: protocol support is provided by pluggable drivers and the core runtime no longer embeds a Modbus/TCP server. Deployments can therefore run without any physical inputs or outputs and hook up only the interfaces they explicitly register.
 
 ## Architecture
 
 * **Cells** – Typed storage units (`number`, `bool`, `string`) with a binary validity flag. Optional diagnostics (error code, message, timestamp) are attached when reads, evaluations or writes fail. Only the validity flag is considered during logic execution.
-* **Read phase** – Groups Modbus reads by slave/function/range. Each group has an individual TTL; groups that expired during the current cycle are re-polled. Raw bytes are marshalled into typed cell values using the configured endianness, signedness and scaling. Read failures only invalidate the affected cells – the rest of the cycle continues.
+* **Read phase** – Groups driver reads by source/function/range. Each group has an individual TTL; groups that expired during the current cycle are re-polled. Raw bytes (or driver specific payloads) are marshalled into typed cell values using the configured endianness, signedness and scaling. Read failures only invalidate the affected cells – the rest of the cycle continues.
 * **Program phase** – Executes reusable control modules that consume existing cell snapshots and emit additional signals. Programs are instantiated from the registry, receive cycle timing information and may produce diagnostics when mandatory outputs are missing or invalid.
 * **Eval phase** – Runs expression ASTs in a deterministic order derived from the declared dependency graph (topological sort with configuration order as tie breaker). Every block operates on a consistent snapshot of the cell state. Optional `valid`/`quality` expressions inspect the computed result (and potential evaluation errors) to decide validity, diagnostics and a quality value for the target cell.
-* **Commit phase** – Writes only the cells that changed beyond the configured deadband/rate limits. Writes are ordered by priority. Marshalling is performed in reverse (typed value → bytes). Failures raise diagnostics but never abort the cycle.
+* **Commit phase** – Writes only the cells that changed beyond the configured deadband/rate limits. Writes are ordered by priority. Marshalling is performed in reverse (typed value → protocol payload). Failures raise diagnostics but never abort the cycle.
 
 The cycle duration is monotonic (default `500ms` if unspecified). Metrics record last cycle duration, counts of read/eval/write errors and total cycles executed.
 
@@ -20,15 +22,13 @@ Interfaces used by the scheduler now live under the `runtime` namespace:
 * `runtime/readers` – reader interfaces, status structures, and factories.
 * `runtime/writers` – writer interfaces, status structures, and factories.
 
-The legacy `serviceio` package still exports deprecated type aliases for
-backwards compatibility but will be removed in a future release. Update existing
-integrations to import the runtime packages directly.
+The legacy `serviceio` package still exports deprecated type aliases for backwards compatibility but will be removed in a future release. Update existing integrations to import the runtime packages directly.
 
 ### Runtime overrides
 
 Besides deterministic scheduling, the service exposes helper methods that make the controller easier to embed into a supervisory application:
 
-* `SetCellValue(id, value)` – manually override a cell with type-checked data. The Modbus server is refreshed immediately so connected HMIs or SCADA clients see the change without waiting for the next cycle.
+* `SetCellValue(id, value)` – manually override a cell with type-checked data. Connected HMIs or supervisory systems see the change on the next publish by their respective drivers.
 * `InvalidateCell(id, code, message)` – mark a cell invalid while attaching a diagnostic entry that is exported to logic blocks and snapshots.
 * `InspectCell(id)` – obtain a structured view of the current value, validity, diagnostic metadata and last update timestamp.
 
@@ -36,7 +36,7 @@ These helpers allow HMIs to implement “force” functionality or provide manua
 
 ## Drivers
 
-Protocol implementations are packaged as standalone Go modules under the [`drivers/`](drivers) directory. The core service does not link against Modbus or CAN dependencies by default – applications register the drivers they need via `service.WithReaderFactory` / `service.WithWriterFactory` options when constructing a `service.Service` instance. Every endpoint must declare the driver it expects so the service can select the matching factories.
+Protocol implementations are packaged as standalone Go modules under the [`drivers/`](drivers) directory. The core service does not link against fieldbus, PLC or SCADA dependencies by default – applications register the drivers they need via `service.WithReaderFactory` / `service.WithWriterFactory` options when constructing a `service.Service` instance. Every endpoint must declare the driver it expects so the service can select the matching factories.
 
 For convenience the [`drivers/bundle`](drivers/bundle) module exposes helper functions that install the built-in drivers:
 
@@ -80,12 +80,10 @@ Key sections mirror the previous layout:
 * `cycle` – Global cycle time.
 * `programs` – Reusable control modules with typed input/output bindings that execute between the read and logic phases.
 * `cells` – Definitions of all local memory cells.
-* `reads` – Block reads referencing a `driver` via the endpoint. The bundled `can` driver ingests UDP/TCP byte streams from CAN↔Ethernet controllers and decodes frames according to an external DBC file.
+* `reads` – Block reads referencing a `driver` via the endpoint. Drivers ingest protocol specific payloads (Modbus, CAN, OPC-UA, mock data, …) and translate them into cell updates.
 * `logic` – Logic blocks with an expression AST, optional `valid`/`quality` expressions and a target cell. Dependencies are automatically discovered from all expressions.
-* `writes` – Write targets referencing a driver identifier. Modbus targets support the existing fields and optional overrides inside `driver_settings`.
+* `writes` – Write targets referencing a driver identifier. Driver specific `driver_settings` values are forwarded untouched so transports can expose their own tuning knobs.
 * `logging` / `policies` – Runtime logging setup and optional global policies (retry behaviour, watchdog, readback, etc.). `logging.format` controls the stdout renderer (`json` by default, `text` for human friendly console output).
-* `server` – Configuration for the embedded Modbus/TCP server that exposes cells as input registers.
-
 ### Example snippet
 
 ```cue
@@ -193,13 +191,7 @@ Programs encapsulate common control algorithms such as PID regulators, ramp gene
 * `inputs` / `outputs` – Mappings from program signal names to cell IDs. Optional signals can define defaults and type overrides.
 * `settings` – Arbitrary key/value map forwarded to the program factory for tuning parameters.
 
-Programs run before logic evaluation and write directly into the associated cells, making their results available to downstream logic blocks, Modbus writes and the embedded server. See [`config.example.cue`](config.example.cue) for a full configuration that demonstrates the bundled programs and how they are wired.
-
-### Embedded Modbus server
-
-When `server.enabled` is `true`, the processor starts an integrated Modbus/TCP server. Cells mapped in `server.cells` are exposed as input registers, making the current controller state available to external systems. Numeric cells are scaled according to the provided `scale` factor and can be marked as signed, while boolean cells are exported as 0/1 values.
-
-Trace level logging now provides detailed insights into each READ/PROGRAM/EVAL/COMMIT step, including the Modbus server update cycle.
+Programs run before logic evaluation and write directly into the associated cells, making their results available to downstream logic blocks and driver backed outputs. See [`config.example.cue`](config.example.cue) for a full configuration that demonstrates the bundled programs and how they are wired.
 
 ## Running
 

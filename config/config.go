@@ -295,6 +295,10 @@ type WorkerSlots struct {
 }
 
 // ServerCellConfig maps a cell onto an input register address exposed via the embedded Modbus server.
+//
+// Deprecated: The embedded Modbus server has been removed. This structure is kept
+// only so older configurations continue to decode but it is ignored by the
+// service.
 type ServerCellConfig struct {
 	Cell    string  `json:"cell"`
 	Address uint16  `json:"address"`
@@ -303,6 +307,9 @@ type ServerCellConfig struct {
 }
 
 // ServerConfig configures the optional embedded Modbus server.
+//
+// Deprecated: The embedded Modbus server has been removed. The configuration is
+// ignored and retained solely for schema compatibility.
 type ServerConfig struct {
 	Enabled bool               `json:"enabled"`
 	Listen  string             `json:"listen"`
@@ -327,7 +334,10 @@ type Config struct {
 	DSL         DSLConfig              `json:"dsl"`
 	Helpers     []HelperFunctionConfig `json:"helpers,omitempty"`
 	Policies    GlobalPolicies         `json:"policies"`
-	Server      ServerConfig           `json:"server"`
+        // Deprecated: the embedded Modbus server has been removed. The field is
+        // ignored when loading the configuration and will be dropped in a
+        // future release.
+        Server      ServerConfig           `json:"server"`
 	HotReload   bool                   `json:"hot_reload,omitempty"`
 	Source      ModuleReference        `json:"-"`
 }
