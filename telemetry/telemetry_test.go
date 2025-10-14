@@ -11,7 +11,7 @@ import (
 func TestNoopCollector(t *testing.T) {
 	collector := Noop()
 	require.NotNil(t, collector)
-	collector.IncHotReload("config.yaml")
+	collector.IncHotReload("config.cue")
 }
 
 func TestPrometheusCollectorRegistersAndReusesCounter(t *testing.T) {
@@ -24,7 +24,7 @@ func TestPrometheusCollectorRegistersAndReusesCounter(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, collector)
 
-	collector.IncHotReload("a.yaml")
+	collector.IncHotReload("a.cue")
 
 	metrics, err := reg.Gather()
 	require.NoError(t, err)
@@ -38,7 +38,7 @@ func TestPrometheusCollectorRegistersAndReusesCounter(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, collector.hotReloads, again.hotReloads)
 
-	again.IncHotReload("a.yaml")
+	again.IncHotReload("a.cue")
 
 	metrics, err = reg.Gather()
 	require.NoError(t, err)

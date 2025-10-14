@@ -10,7 +10,7 @@ collector, err := telemetry.NewPrometheusCollector(prometheus.DefaultRegisterer)
 if err != nil {
     return err
 }
-collector.IncHotReload("config/main.yaml")
+collector.IncHotReload("config/main.cue")
 ```
 
 ## Implementation Notes

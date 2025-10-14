@@ -20,7 +20,7 @@ import (
 )
 
 func main() {
-	cfgPath := flag.String("config", "config.yaml", "Path to configuration file")
+	cfgPath := flag.String("config", "config.cue", "Path to configuration file")
 	healthcheck := flag.Bool("healthcheck", false, "Run a health check and exit")
 	configCheck := flag.Bool("config-check", false, "Validate configuration and exit")
 	liveView := flag.Bool("live-view", false, "Enable live view web interface")
