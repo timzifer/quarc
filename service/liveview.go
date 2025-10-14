@@ -441,7 +441,7 @@ var liveViewTemplate = template.Must(template.New("liveview").Parse(`<!DOCTYPE h
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Modbus Processor Live View</title>
+<title>QUARC Live View</title>
 <style>
 body { font-family: Arial, sans-serif; margin: 2rem; background: #f7f7f7; color: #222; }
 h1 { margin-bottom: 1rem; }
@@ -494,7 +494,7 @@ tr.invalid td { color: #b71c1c; }
 </style>
 </head>
 <body>
-<h1>Modbus Processor Live View</h1>
+<h1>QUARC Live View</h1>
 <div class="controls">
 <button id="runBtn">Run</button>
 <button id="pauseBtn" class="pause">Pause</button>
