@@ -1,6 +1,7 @@
 package service
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -99,5 +100,46 @@ func TestCellStoreSnapshotReuse(t *testing.T) {
 	}
 	if got, ok := reused["value"].Value.(int64); !ok || got != 2 {
 		t.Fatalf("expected updated value 2, got %v", reused["value"].Value)
+	}
+}
+
+func TestConvertDecimalValuePointerInputs(t *testing.T) {
+	dec := decimal.NewFromFloat(12.34)
+	got, err := convertDecimalValue(&dec)
+	if err != nil {
+		t.Fatalf("convertDecimalValue pointer: %v", err)
+	}
+	if !got.Equal(dec) {
+		t.Fatalf("expected %s, got %s", dec.String(), got.String())
+	}
+
+	direct, err := convertDecimalValue(dec)
+	if err != nil {
+		t.Fatalf("convertDecimalValue direct: %v", err)
+	}
+	if !direct.Equal(dec) {
+		t.Fatalf("expected %s, got %s", dec.String(), direct.String())
+	}
+}
+
+func TestConvertDecimalValueErrors(t *testing.T) {
+	cases := []struct {
+		name  string
+		input interface{}
+	}{
+		{name: "nil pointer", input: (*decimal.Decimal)(nil)},
+		{name: "overflow", input: uint64(math.MaxInt64) + 1},
+		{name: "invalid string", input: "not a number"},
+		{name: "nan", input: math.NaN()},
+		{name: "unsupported type", input: struct{}{}},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := convertDecimalValue(tc.input); err == nil {
+				t.Fatalf("expected error for %s input", tc.name)
+			}
+		})
 	}
 }
