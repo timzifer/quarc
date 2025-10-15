@@ -299,7 +299,7 @@ Programs run before logic evaluation and write directly into the associated cell
    ```bash
    go build ./cmd/...
    ```
-2. Start the processor with your configuration:
+2. Start the controller with your configuration:
    ```bash
    ./quarc --config path/to/config.cue
    ```
