@@ -1,3 +1,4 @@
+// Command quarc provides the main entry point for running the processor service.
 package main
 
 import (

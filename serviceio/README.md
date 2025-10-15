@@ -15,8 +15,8 @@ New development should import the runtime packages directly:
 
 ```go
 import (
-    "github.com/timzifer/modbus_processor/runtime/readers"
-    "github.com/timzifer/modbus_processor/runtime/state"
+    "github.com/timzifer/quarc/runtime/readers"
+    "github.com/timzifer/quarc/runtime/state"
 )
 
 group, err := myReaderFactory(cfg, readers.ReaderDependencies{Cells: store})

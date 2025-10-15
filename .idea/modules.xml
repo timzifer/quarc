@@ -2,7 +2,8 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/modbus_processor.iml" filepath="$PROJECT_DIR$/.idea/modbus_processor.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/quarc.iml" filepath="$PROJECT_DIR$/.idea/quarc.iml" />
     </modules>
   </component>
 </project>
+
