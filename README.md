@@ -1,4 +1,4 @@
-![QUARC Gopher Mascot](docs/assets/quarc-gopher.png)
+![QUARC Gopher Mascot](docs/assets/quarc-gopher.svg)
 
 # QUARC (Quadriphasic Automation Runtime Controller)
 
