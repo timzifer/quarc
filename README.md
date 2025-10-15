@@ -1,3 +1,5 @@
+![QUARC Gopher Mascot](docs/assets/quarc-gopher.png)
+
 # QUARC (Quadriphasic Automation Runtime Controller)
 
 ![Coverage](https://gopherbadger.herokuapp.com/badge/github.com/timzifer/quarc.svg)
