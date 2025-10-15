@@ -2,7 +2,7 @@
 
 # QUARC (Quadriphasic Automation Runtime Controller)
 
-![Coverage](https://gopherbadger.herokuapp.com/badge/github.com/timzifer/quarc.svg)
+![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/timzifer/quarc/main/docs/coverage-badge.json)
 
 A deterministic, cyclic automation runtime that executes four strictly separated phases – **READ**, **PROGRAM**, **EVAL** and **COMMIT** – on a fixed schedule. The controller stores typed in-memory cells, lets reusable control programs derive new signals, evaluates expression-based logic with optional validation expressions and finally commits changes back to configured outputs using a write-on-change strategy.
 
