@@ -40,6 +40,7 @@ type ReadGroupStatus struct {
 type ReaderDependencies struct {
 	Cells    state.CellStore
 	Activity activity.Tracker
+	Buffers  *SignalBufferStore
 }
 
 // ReaderFactory constructs a ReadGroup using the provided configuration and

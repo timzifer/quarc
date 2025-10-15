@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/timzifer/quarc/config"
 	"github.com/timzifer/quarc/runtime/readers"
+	"github.com/timzifer/quarc/runtime/state"
 	"github.com/timzifer/quarc/runtime/writers"
 )
 
@@ -21,15 +22,17 @@ type Service struct {
 	cfg    *config.Config
 	logger zerolog.Logger
 
-	cells     *cellStore
-	snapshots *snapshotSwitch
-	reads     []readers.ReadGroup
-	logic     []*logicBlock
-	ordered   []*logicBlock
-	writes    []writers.Writer
-	server    *modbusServer
-	programs  []*programBinding
-	workers   workerSlots
+	cells       *cellStore
+	snapshots   *snapshotSwitch
+	reads       []readers.ReadGroup
+	buffers     *readers.SignalBufferStore
+	bufferCells map[string]state.Cell
+	logic       []*logicBlock
+	ordered     []*logicBlock
+	writes      []writers.Writer
+	server      *modbusServer
+	programs    []*programBinding
+	workers     workerSlots
 
 	metrics       metrics
 	lastCycleTime time.Time
@@ -42,6 +45,11 @@ type Service struct {
 	heatmap    heatmapSettings
 	activity   *activityTracker
 }
+
+const (
+	diagCodeBufferOverflow   = "read.buffer_overflow"
+	diagCodeAggregationError = "read.aggregation"
+)
 
 type metrics struct {
 	CycleCount        uint64
@@ -238,11 +246,15 @@ func New(cfg *config.Config, logger zerolog.Logger, opts ...Option) (*Service, e
 	svc.heatmap = newHeatmapSettings(cfg.LiveView.Heatmap)
 	svc.activity = newActivityTracker(&svc.cycleIndex, svc.heatmap)
 
-	reads, err := buildReadGroups(cfg.Reads, readers.ReaderDependencies{Cells: cells, Activity: svc.activity}, registry.readers)
+	bufferStore := readers.NewSignalBufferStore()
+	deps := readers.ReaderDependencies{Cells: cells, Activity: svc.activity, Buffers: bufferStore}
+	reads, bufferCells, err := buildReadGroups(cfg.Reads, deps, registry.readers)
 	if err != nil {
 		return nil, err
 	}
 	svc.reads = reads
+	svc.buffers = bufferStore
+	svc.bufferCells = bufferCells
 
 	logic, ordered, err := newLogicBlocks(cfg.Logic, cells, dsl, logger, svc.activity)
 	if err != nil {
@@ -262,31 +274,59 @@ func New(cfg *config.Config, logger zerolog.Logger, opts ...Option) (*Service, e
 		return nil, err
 	}
 	svc.writes = writes
-        if cfg.Server.Enabled {
-                logger.Warn().Str("component", "modbus_server").Msg("embedded Modbus server configuration detected but ignored")
-        }
-        svc.server = nil
-        return svc, nil
+	if cfg.Server.Enabled {
+		logger.Warn().Str("component", "modbus_server").Msg("embedded Modbus server configuration detected but ignored")
+	}
+	svc.server = nil
+	return svc, nil
 }
 
-func buildReadGroups(cfgs []config.ReadGroupConfig, deps readers.ReaderDependencies, factories map[string]readers.ReaderFactory) ([]readers.ReadGroup, error) {
+func buildReadGroups(cfgs []config.ReadGroupConfig, deps readers.ReaderDependencies, factories map[string]readers.ReaderFactory) ([]readers.ReadGroup, map[string]state.Cell, error) {
 	groups := make([]readers.ReadGroup, 0, len(cfgs))
+	bufferCells := make(map[string]state.Cell)
 	for _, cfg := range cfgs {
+		for _, signal := range cfg.Signals {
+			if signal.Cell == "" {
+				return nil, nil, fmt.Errorf("read group %s: signal missing cell", cfg.ID)
+			}
+			if deps.Cells == nil {
+				return nil, nil, errors.New("read group dependencies missing cells store")
+			}
+			cell, err := deps.Cells.Get(signal.Cell)
+			if err != nil {
+				return nil, nil, err
+			}
+			bufferCells[signal.Cell] = cell
+			if deps.Buffers != nil {
+				strategy, err := readers.ParseAggregationStrategy(signal.Aggregation)
+				if err != nil {
+					return nil, nil, fmt.Errorf("read group %s signal %s: %w", cfg.ID, signal.Cell, err)
+				}
+				size := signal.BufferSize
+				if size <= 0 {
+					size = 1
+				}
+				if _, err := deps.Buffers.Configure(signal.Cell, size, strategy); err != nil {
+					return nil, nil, fmt.Errorf("read group %s signal %s: %w", cfg.ID, signal.Cell, err)
+				}
+			}
+		}
+
 		driver := cfg.Endpoint.Driver
 		if driver == "" {
-			return nil, fmt.Errorf("read group %s: endpoint missing driver", cfg.ID)
+			return nil, nil, fmt.Errorf("read group %s: endpoint missing driver", cfg.ID)
 		}
 		factory := factories[driver]
 		if factory == nil {
-			return nil, fmt.Errorf("read group %s: no reader factory registered for driver %s", cfg.ID, driver)
+			return nil, nil, fmt.Errorf("read group %s: no reader factory registered for driver %s", cfg.ID, driver)
 		}
 		group, err := factory(cfg, deps)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		groups = append(groups, group)
 	}
-	return groups, nil
+	return groups, bufferCells, nil
 }
 
 func buildWriteTargets(cfgs []config.WriteTargetConfig, deps writers.WriterDependencies, factories map[string]writers.WriterFactory) ([]writers.Writer, error) {
@@ -331,7 +371,7 @@ func Validate(cfg *config.Config, logger zerolog.Logger, opts ...Option) error {
 	if err != nil {
 		return err
 	}
-	if _, err := buildReadGroups(cfg.Reads, readers.ReaderDependencies{Cells: cells}, registry.readers); err != nil {
+	if _, _, err := buildReadGroups(cfg.Reads, readers.ReaderDependencies{Cells: cells, Buffers: readers.NewSignalBufferStore()}, registry.readers); err != nil {
 		return err
 	}
 	if _, _, err := newLogicBlocks(cfg.Logic, cells, dsl, logger, nil); err != nil {
@@ -343,10 +383,10 @@ func Validate(cfg *config.Config, logger zerolog.Logger, opts ...Option) error {
 	if _, err := buildWriteTargets(cfg.Writes, writers.WriterDependencies{Cells: cells}, registry.writers); err != nil {
 		return err
 	}
-        if cfg.Server.Enabled {
-                logger.Warn().Str("component", "modbus_server").Msg("embedded Modbus server configuration detected but ignored")
-        }
-        return nil
+	if cfg.Server.Enabled {
+		logger.Warn().Str("component", "modbus_server").Msg("embedded Modbus server configuration detected but ignored")
+	}
+	return nil
 }
 
 // Run executes the controller loop until the context is cancelled.
@@ -370,6 +410,7 @@ func (s *Service) IterateOnce(ctx context.Context, now time.Time) error {
 	start := time.Now()
 	s.cycleIndex.Add(1)
 	readErrors := s.readPhase(ctx, now)
+	readErrors += s.flushBufferPhase(now)
 	var readSnapshot map[string]*snapshotValue
 	if s.snapshots != nil {
 		readSnapshot = s.snapshots.Capture(s.cells)
@@ -383,13 +424,13 @@ func (s *Service) IterateOnce(ctx context.Context, now time.Time) error {
 	} else {
 		programSnapshot = s.cells.snapshot()
 	}
-        evalErrors := s.evalPhase(now, programSnapshot)
-        if s.snapshots != nil {
-                s.snapshots.Capture(s.cells)
-        } else {
-                s.cells.snapshot()
-        }
-        writeErrors := s.commitPhase(ctx, now)
+	evalErrors := s.evalPhase(now, programSnapshot)
+	if s.snapshots != nil {
+		s.snapshots.Capture(s.cells)
+	} else {
+		s.cells.snapshot()
+	}
+	writeErrors := s.commitPhase(ctx, now)
 
 	s.metrics.CycleCount++
 	s.metrics.LastDuration = time.Since(start)
@@ -416,6 +457,79 @@ func (s *Service) readPhase(ctx context.Context, now time.Time) int {
 		return group.Perform(now, s.logger)
 	})
 	return errors
+}
+
+func (s *Service) flushBufferPhase(now time.Time) int {
+	if s == nil || s.buffers == nil {
+		return 0
+	}
+	errors := 0
+	for _, buffer := range s.buffers.All() {
+		if buffer == nil {
+			continue
+		}
+		agg, ok, err := buffer.Flush()
+		cell := s.lookupBufferCell(buffer.ID())
+		if cell == nil {
+			if err != nil {
+				errors++
+			}
+			continue
+		}
+		if err != nil {
+			cell.MarkInvalid(now, diagCodeAggregationError, err.Error())
+			errors++
+			continue
+		}
+		if !ok {
+			if agg.Overflow {
+				cell.MarkInvalid(now, diagCodeBufferOverflow, fmt.Sprintf("signal buffer overflow for cell %s", buffer.ID()))
+				errors++
+			}
+			continue
+		}
+		ts := agg.Timestamp
+		if ts.IsZero() {
+			ts = now
+		}
+		if agg.Overflow {
+			cell.MarkInvalid(ts, diagCodeBufferOverflow, fmt.Sprintf("signal buffer overflow for cell %s", buffer.ID()))
+			errors++
+			continue
+		}
+		if err := cell.SetValue(agg.Value, ts, agg.Quality); err != nil {
+			cell.MarkInvalid(ts, diagCodeAggregationError, err.Error())
+			errors++
+			continue
+		}
+		if s.activity != nil {
+			s.activity.RecordCellRead(buffer.ID(), "read", ts)
+		}
+	}
+	return errors
+}
+
+func (s *Service) lookupBufferCell(id string) state.Cell {
+	if id == "" || s == nil {
+		return nil
+	}
+	if s.bufferCells != nil {
+		if cell, ok := s.bufferCells[id]; ok && cell != nil {
+			return cell
+		}
+	}
+	if s.cells == nil {
+		return nil
+	}
+	cell, err := s.cells.mustGet(id)
+	if err != nil {
+		return nil
+	}
+	if s.bufferCells == nil {
+		s.bufferCells = make(map[string]state.Cell)
+	}
+	s.bufferCells[id] = cell
+	return cell
 }
 
 func (s *Service) evalPhase(now time.Time, snapshot map[string]*snapshotValue) int {
@@ -702,12 +816,12 @@ func (s *Service) Close() error {
 	for _, target := range s.writes {
 		target.Close()
 	}
-        if s.server != nil {
-                // Legacy embedded Modbus server support has been removed, but we
-                // keep the shutdown call to guard against third-party extensions
-                // that might still register a server implementation.
-                s.server.close()
-        }
+	if s.server != nil {
+		// Legacy embedded Modbus server support has been removed, but we
+		// keep the shutdown call to guard against third-party extensions
+		// that might still register a server implementation.
+		s.server.close()
+	}
 	if s.liveView != nil {
 		s.liveView.close()
 	}
@@ -719,10 +833,10 @@ func (s *Service) Close() error {
 // Deprecated: The embedded Modbus server has been removed. The method now
 // returns an empty string and will disappear in a future release.
 func (s *Service) ServerAddress() string {
-        if s == nil {
-                return ""
-        }
-        return ""
+	if s == nil {
+		return ""
+	}
+	return ""
 }
 
 // SetCellValue applies a manual override to the specified cell. Overrides are
@@ -740,9 +854,9 @@ func (s *Service) SetCellValue(id string, value interface{}) error {
 	if err := cell.setValue(value, now, nil); err != nil {
 		return err
 	}
-        // Legacy Modbus server refreshes are intentionally omitted – overrides are
-        // picked up by drivers on their next publish cycle.
-        return nil
+	// Legacy Modbus server refreshes are intentionally omitted – overrides are
+	// picked up by drivers on their next publish cycle.
+	return nil
 }
 
 // InvalidateCell marks the specified cell invalid with an optional diagnostic code/message.
@@ -756,9 +870,9 @@ func (s *Service) InvalidateCell(id, code, message string) error {
 	}
 	now := time.Now()
 	cell.markInvalid(now, code, message)
-        // Legacy Modbus server refreshes are intentionally omitted – diagnostics
-        // propagate via snapshots that drivers publish on their own cadence.
-        return nil
+	// Legacy Modbus server refreshes are intentionally omitted – diagnostics
+	// propagate via snapshots that drivers publish on their own cadence.
+	return nil
 }
 
 // InspectCell returns the current state of the requested cell.

@@ -107,13 +107,15 @@ type CellConfig struct {
 
 // ReadSignalConfig maps a portion of a Modbus read block into a cell.
 type ReadSignalConfig struct {
-	Cell       string    `json:"cell"`
-	Offset     uint16    `json:"offset"`
-	Bit        *uint8    `json:"bit,omitempty"`
-	Type       ValueKind `json:"type"`
-	Scale      float64   `json:"scale,omitempty"`
-	Endianness string    `json:"endianness,omitempty"`
-	Signed     bool      `json:"signed,omitempty"`
+	Cell        string    `json:"cell"`
+	Offset      uint16    `json:"offset"`
+	Bit         *uint8    `json:"bit,omitempty"`
+	Type        ValueKind `json:"type"`
+	Scale       float64   `json:"scale,omitempty"`
+	Endianness  string    `json:"endianness,omitempty"`
+	Signed      bool      `json:"signed,omitempty"`
+	Aggregation string    `json:"aggregation,omitempty"`
+	BufferSize  int       `json:"buffer_size,omitempty"`
 }
 
 // ReadGroupConfig describes a block read.
@@ -334,12 +336,12 @@ type Config struct {
 	DSL         DSLConfig              `json:"dsl"`
 	Helpers     []HelperFunctionConfig `json:"helpers,omitempty"`
 	Policies    GlobalPolicies         `json:"policies"`
-        // Deprecated: the embedded Modbus server has been removed. The field is
-        // ignored when loading the configuration and will be dropped in a
-        // future release.
-        Server      ServerConfig           `json:"server"`
-	HotReload   bool                   `json:"hot_reload,omitempty"`
-	Source      ModuleReference        `json:"-"`
+	// Deprecated: the embedded Modbus server has been removed. The field is
+	// ignored when loading the configuration and will be dropped in a
+	// future release.
+	Server    ServerConfig    `json:"server"`
+	HotReload bool            `json:"hot_reload,omitempty"`
+	Source    ModuleReference `json:"-"`
 }
 
 // Load reads and decodes the configuration file from disk.

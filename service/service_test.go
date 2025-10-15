@@ -1,11 +1,12 @@
 package service
 
 import (
-        "context"
-        "encoding/binary"
-        "fmt"
-        "io"
-        "strings"
+	"context"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -99,6 +100,13 @@ func newStubReaderFactory(factory testClientFactory) readers.ReaderFactory {
 		if err != nil {
 			return nil, err
 		}
+		if deps.Buffers == nil {
+			return nil, fmt.Errorf("read group %s: buffer store not initialised", cfg.ID)
+		}
+		buffer, err := deps.Buffers.Get(cellID)
+		if err != nil {
+			return nil, err
+		}
 		client, err := factory(cfg.Endpoint)
 		if err != nil {
 			return nil, err
@@ -107,6 +115,7 @@ func newStubReaderFactory(factory testClientFactory) readers.ReaderFactory {
 			id:       cfg.ID,
 			client:   client,
 			cell:     cell,
+			buffer:   buffer,
 			cellID:   cellID,
 			function: cfg.Function,
 			start:    cfg.Start,
@@ -147,6 +156,7 @@ type stubReadGroup struct {
 	id       string
 	client   testClient
 	cell     state.Cell
+	buffer   *readers.SignalBuffer
 	cellID   string
 	function string
 	start    uint16
@@ -184,9 +194,15 @@ func (g *stubReadGroup) Perform(now time.Time, logger zerolog.Logger) int {
 		return 1
 	}
 	value := binary.BigEndian.Uint16(data[:2])
-	if err := g.cell.SetValue(float64(value), now, nil); err != nil {
-		logger.Error().Err(err).Str("group", g.id).Msg("stub read set value failed")
-		return 1
+	if g.buffer != nil {
+		if err := g.buffer.Push(now, float64(value), nil); err != nil {
+			if errors.Is(err, readers.ErrSignalBufferOverflow) {
+				logger.Warn().Str("group", g.id).Str("cell", g.cellID).Msg("stub read buffer overflow")
+			} else {
+				logger.Error().Err(err).Str("group", g.id).Msg("stub read buffer push failed")
+				return 1
+			}
+		}
 	}
 	g.lastRun = now
 	return 0
@@ -509,12 +525,11 @@ func TestCycleDetection(t *testing.T) {
 	}
 }
 
-
 func TestServiceManualCellOperations(t *testing.T) {
-        cfg := &config.Config{
-                Cycle: config.Duration{Duration: time.Millisecond},
-                Cells: []config.CellConfig{{ID: "manual", Type: config.ValueKindNumber}},
-        }
+	cfg := &config.Config{
+		Cycle: config.Duration{Duration: time.Millisecond},
+		Cells: []config.CellConfig{{ID: "manual", Type: config.ValueKindNumber}},
+	}
 	logger := zerolog.New(io.Discard)
 	svc, err := New(cfg, logger)
 	if err != nil {
@@ -543,11 +558,11 @@ func TestServiceManualCellOperations(t *testing.T) {
 		t.Fatalf("unexpected diagnosis: %+v", state.Diagnosis)
 	}
 
-        if err := svc.InvalidateCell("manual", "manual.override", "forced invalid"); err != nil {
-                t.Fatalf("invalidate cell: %v", err)
-        }
+	if err := svc.InvalidateCell("manual", "manual.override", "forced invalid"); err != nil {
+		t.Fatalf("invalidate cell: %v", err)
+	}
 
-        state, err = svc.InspectCell("manual")
+	state, err = svc.InspectCell("manual")
 	if err != nil {
 		t.Fatalf("inspect cell after invalidate: %v", err)
 	}
@@ -559,41 +574,41 @@ func TestServiceManualCellOperations(t *testing.T) {
 	}
 	if state.Diagnosis.Message != "forced invalid" {
 		t.Fatalf("unexpected diagnosis message: %v", state.Diagnosis.Message)
-        }
+	}
 }
 
 func TestServerConfigIgnored(t *testing.T) {
-        cfg := &config.Config{
-                Cells: []config.CellConfig{{ID: "value", Type: config.ValueKindNumber}},
-                Server: config.ServerConfig{
-                        Enabled: true,
-                        Listen:  "127.0.0.1:0",
-                        UnitID:  1,
-                        Cells: []config.ServerCellConfig{{Cell: "value", Address: 0}},
-                },
-        }
-        logger := zerolog.New(io.Discard)
+	cfg := &config.Config{
+		Cells: []config.CellConfig{{ID: "value", Type: config.ValueKindNumber}},
+		Server: config.ServerConfig{
+			Enabled: true,
+			Listen:  "127.0.0.1:0",
+			UnitID:  1,
+			Cells:   []config.ServerCellConfig{{Cell: "value", Address: 0}},
+		},
+	}
+	logger := zerolog.New(io.Discard)
 
-        if err := Validate(cfg, logger); err != nil {
-                t.Fatalf("validate config with legacy server: %v", err)
-        }
+	if err := Validate(cfg, logger); err != nil {
+		t.Fatalf("validate config with legacy server: %v", err)
+	}
 
-        svc, err := New(cfg, logger)
-        if err != nil {
-                t.Fatalf("new service: %v", err)
-        }
-        defer svc.Close()
+	svc, err := New(cfg, logger)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	defer svc.Close()
 
-        if addr := svc.ServerAddress(); addr != "" {
-                t.Fatalf("expected legacy server address to be empty, got %q", addr)
-        }
+	if addr := svc.ServerAddress(); addr != "" {
+		t.Fatalf("expected legacy server address to be empty, got %q", addr)
+	}
 
-        if err := svc.SetCellValue("value", 123.4); err != nil {
-                t.Fatalf("set cell value: %v", err)
-        }
-        if err := svc.InvalidateCell("value", "legacy.server", "ignored"); err != nil {
-                t.Fatalf("invalidate cell: %v", err)
-        }
+	if err := svc.SetCellValue("value", 123.4); err != nil {
+		t.Fatalf("set cell value: %v", err)
+	}
+	if err := svc.InvalidateCell("value", "legacy.server", "ignored"); err != nil {
+		t.Fatalf("invalidate cell: %v", err)
+	}
 }
 
 func TestServiceClosesRemoteClients(t *testing.T) {
@@ -665,7 +680,6 @@ func TestServiceClosesRemoteClients(t *testing.T) {
 		}
 	}
 }
-
 
 func TestNewProgramBindingsDetectsDuplicateOutputs(t *testing.T) {
 	logger := zerolog.New(io.Discard)
