@@ -41,9 +41,9 @@ func TestPrometheusCollectorRegistersAndReusesCounter(t *testing.T) {
 	require.Len(t, metrics, 3)
 
 	mf := metricsByName(metrics)
-	requireCounterValue(t, mf["modbus_processor_config_hot_reload_total"], 1)
-	requireCounterValue(t, mf["modbus_processor_read_buffer_dropped_total"], 3)
-	requireGaugeValue(t, mf["modbus_processor_read_buffer_occupancy"], 4)
+       requireCounterValue(t, mf["quarc_config_hot_reload_total"], 1)
+       requireCounterValue(t, mf["quarc_read_buffer_dropped_total"], 3)
+       requireGaugeValue(t, mf["quarc_read_buffer_occupancy"], 4)
 
 	again, err := NewPrometheusCollector(reg)
 	require.NoError(t, err)
@@ -58,9 +58,9 @@ func TestPrometheusCollectorRegistersAndReusesCounter(t *testing.T) {
 	metrics, err = reg.Gather()
 	require.NoError(t, err)
 	mf = metricsByName(metrics)
-	requireCounterValue(t, mf["modbus_processor_config_hot_reload_total"], 2)
-	requireCounterValue(t, mf["modbus_processor_read_buffer_dropped_total"], 5)
-	requireGaugeValue(t, mf["modbus_processor_read_buffer_occupancy"], 6)
+       requireCounterValue(t, mf["quarc_config_hot_reload_total"], 2)
+       requireCounterValue(t, mf["quarc_read_buffer_dropped_total"], 5)
+       requireGaugeValue(t, mf["quarc_read_buffer_occupancy"], 6)
 }
 
 func requireCounterValue(t *testing.T, mf *dto.MetricFamily, value float64) {
