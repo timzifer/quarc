@@ -369,3 +369,183 @@ config: config & {
 		t.Fatalf("expected read to reference namespaced cell, got %q", cfg.Reads[0].Signals[0].Cell)
 	}
 }
+
+func TestLoadSignalBufferConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.cue")
+
+	content := `package plant
+
+config: {
+    package: "plant.core"
+    cycle: "1s"
+` + baseSections + `
+    cells: [
+        {
+            id: "temperature"
+            type: "number"
+        },
+    ]
+    reads: [
+        {
+            id: "sensor"
+            endpoint: {
+                address: "localhost:502"
+                unit_id: 1
+            }
+            function: "holding"
+            start: 0
+            length: 1
+            ttl: "1s"
+            signals: [
+                {
+                    cell: "temperature"
+                    offset: 0
+                    type: "number"
+                    buffer: {
+                        capacity: 8
+                        aggregator: "sum"
+                    }
+                },
+            ]
+        },
+    ]
+}
+`
+
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if len(cfg.Reads) != 1 {
+		t.Fatalf("expected 1 read, got %d", len(cfg.Reads))
+	}
+	signals := cfg.Reads[0].Signals
+	if len(signals) != 1 {
+		t.Fatalf("expected 1 signal, got %d", len(signals))
+	}
+	signal := signals[0]
+	if signal.Aggregation != "sum" {
+		t.Fatalf("expected aggregation sum, got %q", signal.Aggregation)
+	}
+	if signal.BufferSize != 8 {
+		t.Fatalf("expected buffer size 8, got %d", signal.BufferSize)
+	}
+	if signal.Buffer == nil {
+		t.Fatalf("expected buffer config to be populated")
+	}
+	if signal.Buffer.Capacity == nil || *signal.Buffer.Capacity != 8 {
+		t.Fatalf("expected buffer capacity to be 8, got %#v", signal.Buffer.Capacity)
+	}
+	if signal.Buffer.Aggregator != "sum" {
+		t.Fatalf("expected buffer aggregator sum, got %q", signal.Buffer.Aggregator)
+	}
+}
+
+func TestLoadRejectsInvalidSignalBufferAggregator(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.cue")
+
+	content := `package plant
+
+config: {
+    package: "plant.core"
+    cycle: "1s"
+` + baseSections + `
+    cells: [
+        {
+            id: "temperature"
+            type: "number"
+        },
+    ]
+    reads: [
+        {
+            id: "sensor"
+            endpoint: {
+                address: "localhost:502"
+                unit_id: 1
+            }
+            function: "holding"
+            start: 0
+            length: 1
+            ttl: "1s"
+            signals: [
+                {
+                    cell: "temperature"
+                    offset: 0
+                    type: "number"
+                    buffer: {
+                        capacity: 4
+                        aggregator: "invalid"
+                    }
+                },
+            ]
+        },
+    ]
+}
+`
+
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected load to fail due to invalid buffer aggregator")
+	}
+}
+
+func TestLoadRejectsNonPositiveSignalBufferCapacity(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.cue")
+
+	content := `package plant
+
+config: {
+    package: "plant.core"
+    cycle: "1s"
+` + baseSections + `
+    cells: [
+        {
+            id: "temperature"
+            type: "number"
+        },
+    ]
+    reads: [
+        {
+            id: "sensor"
+            endpoint: {
+                address: "localhost:502"
+                unit_id: 1
+            }
+            function: "holding"
+            start: 0
+            length: 1
+            ttl: "1s"
+            signals: [
+                {
+                    cell: "temperature"
+                    offset: 0
+                    type: "number"
+                    buffer: {
+                        capacity: 0
+                    }
+                },
+            ]
+        },
+    ]
+}
+`
+
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected load to fail due to non-positive buffer capacity")
+	}
+}

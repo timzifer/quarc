@@ -298,11 +298,18 @@ func buildReadGroups(cfgs []config.ReadGroupConfig, deps readers.ReaderDependenc
 			}
 			bufferCells[signal.Cell] = cell
 			if deps.Buffers != nil {
-				strategy, err := readers.ParseAggregationStrategy(signal.Aggregation)
+				aggName := signal.Aggregation
+				if signal.Buffer != nil && signal.Buffer.Aggregator != "" {
+					aggName = signal.Buffer.Aggregator
+				}
+				strategy, err := readers.ParseAggregationStrategy(aggName)
 				if err != nil {
 					return nil, nil, fmt.Errorf("read group %s signal %s: %w", cfg.ID, signal.Cell, err)
 				}
 				size := signal.BufferSize
+				if signal.Buffer != nil && signal.Buffer.Capacity != nil {
+					size = *signal.Buffer.Capacity
+				}
 				if size <= 0 {
 					size = 1
 				}
