@@ -246,7 +246,7 @@ Programs run before logic evaluation and write directly into the associated cell
    ```
 2. Start the processor with your configuration:
    ```bash
-   ./modbus_processor --config path/to/config.cue
+   ./quarc --config path/to/config.cue
    ```
 
    Use `--config-check` to produce a detailed logic validation report without starting the service, or `--healthcheck` to perform a lightweight configuration validation suitable for Docker health probes.
@@ -257,10 +257,10 @@ The service logs with [zerolog](https://github.com/rs/zerolog) and can optionall
 
 Releases tag the root module **and** the driver modules so that consumers can pin compatible versions. When creating a new version, create matching tags for:
 
-* `github.com/timzifer/modbus_processor`
-* `github.com/timzifer/modbus_processor/drivers/modbus`
-* `github.com/timzifer/modbus_processor/drivers/canstream`
-* `github.com/timzifer/modbus_processor/drivers/bundle`
+* `github.com/timzifer/quarc`
+* `github.com/timzifer/quarc/drivers/modbus`
+* `github.com/timzifer/quarc/drivers/canstream`
+* `github.com/timzifer/quarc/drivers/bundle`
 
 This ensures that downstream users embedding the drivers can resolve consistent module versions.
 
