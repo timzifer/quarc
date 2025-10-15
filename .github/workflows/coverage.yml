@@ -1,0 +1,38 @@
+name: Go coverage
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Run tests with coverage
+        run: go test ./... -coverprofile=coverage.out
+
+      - name: Summarise coverage
+        id: coverage
+        run: |
+          go tool cover -func=coverage.out | tail -n 1 | awk '{print $3}' > coverage.txt
+          echo "percentage=$(cat coverage.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload coverage profile
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: coverage.out
+
+      - name: Publish coverage summary
+        run: |
+          echo "## Coverage" >> "$GITHUB_STEP_SUMMARY"
+          echo "Total: ${{ steps.coverage.outputs.percentage }}" >> "$GITHUB_STEP_SUMMARY"
