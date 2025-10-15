@@ -54,23 +54,17 @@ jobs:
             percent_integer=0
           fi
           if [ "$percent_integer" -ge 90 ]; then
-            color="brightgreen"
+            COLOR="brightgreen"
           elif [ "$percent_integer" -ge 75 ]; then
-            color="yellow"
+            COLOR="yellow"
           elif [ "$percent_integer" -ge 60 ]; then
-            color="orange"
+            COLOR="orange"
           else
-            color="red"
+            COLOR="red"
           fi
 
-          cat <<BADGE > docs/coverage-badge.json
-{
-  "schemaVersion": 1,
-  "label": "coverage",
-  "message": "${PERCENTAGE}",
-  "color": "${color}"
-}
-BADGE
+          export COLOR
+          python -c 'import json, os, pathlib; path = pathlib.Path("docs/coverage-badge.json"); path.parent.mkdir(parents=True, exist_ok=True); path.write_text(json.dumps({"schemaVersion": 1, "label": "coverage", "message": os.environ["PERCENTAGE"], "color": os.environ["COLOR"]}))'
 
           if git status --porcelain docs/coverage-badge.json | grep -q .; then
             git config user.name "github-actions[bot]"
