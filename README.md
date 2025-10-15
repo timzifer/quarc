@@ -1,5 +1,7 @@
 # QUARC (Quadriphasic Automation Runtime Controller)
 
+![Coverage](https://gopherbadger.herokuapp.com/badge/github.com/timzifer/quarc.svg)
+
 A deterministic, cyclic automation runtime that executes four strictly separated phases – **READ**, **PROGRAM**, **EVAL** and **COMMIT** – on a fixed schedule. The controller stores typed in-memory cells, lets reusable control programs derive new signals, evaluates expression-based logic with optional validation expressions and finally commits changes back to configured outputs using a write-on-change strategy.
 
 QUARC is transport agnostic: protocol support is provided by pluggable drivers and the core runtime no longer embeds a Modbus/TCP server. Deployments can therefore run without any physical inputs or outputs and hook up only the interfaces they explicitly register.
@@ -13,6 +15,10 @@ QUARC is transport agnostic: protocol support is provided by pluggable drivers a
 * **Commit phase** – Writes only the cells that changed beyond the configured deadband/rate limits. Writes are ordered by priority. Marshalling is performed in reverse (typed value → protocol payload). Failures raise diagnostics but never abort the cycle.
 
 The cycle duration is monotonic (default `500ms` if unspecified). Metrics record last cycle duration, counts of read/eval/write errors and total cycles executed.
+
+## Continuous integration
+
+The [Go coverage workflow](.github/workflows/coverage.yml) runs `go test ./... -coverprofile=coverage.out`, publishes the coverage profile as a build artifact and reports the aggregated coverage percentage in the job summary.
 
 ## Runtime packages
 
