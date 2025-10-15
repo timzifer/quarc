@@ -51,8 +51,8 @@ func NewPrometheusCollector(reg prometheus.Registerer) (*PrometheusCollector, er
 	}
 	hotReloadCounterLock.Lock()
 	if hotReloadCounter == nil {
-		counter := prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "modbus_processor_config_hot_reload_total",
+               counter := prometheus.NewCounterVec(prometheus.CounterOpts{
+                       Name: "quarc_config_hot_reload_total",
 			Help: "Number of hot reload operations triggered per configuration source file.",
 		}, []string{"file"})
 		if err := reg.Register(counter); err != nil {
@@ -73,8 +73,8 @@ func NewPrometheusCollector(reg prometheus.Registerer) (*PrometheusCollector, er
 
 	bufferDropCounterLock.Lock()
 	if bufferDropCounter == nil {
-		counter := prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "modbus_processor_read_buffer_dropped_total",
+               counter := prometheus.NewCounterVec(prometheus.CounterOpts{
+                       Name: "quarc_read_buffer_dropped_total",
 			Help: "Number of samples dropped from read buffers due to capacity limits.",
 		}, []string{"group", "buffer"})
 		if err := reg.Register(counter); err != nil {
@@ -97,8 +97,8 @@ func NewPrometheusCollector(reg prometheus.Registerer) (*PrometheusCollector, er
 
 	bufferOccupancyGaugeLock.Lock()
 	if bufferOccupancyGauge == nil {
-		gauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "modbus_processor_read_buffer_occupancy",
+               gauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+                       Name: "quarc_read_buffer_occupancy",
 			Help: "Number of samples observed in read buffers during the last flush.",
 		}, []string{"group", "buffer"})
 		if err := reg.Register(gauge); err != nil {
