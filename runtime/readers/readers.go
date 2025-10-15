@@ -35,6 +35,14 @@ type ReadGroupStatus struct {
 	LastRun      time.Time
 	LastDuration time.Duration
 	Source       config.ModuleReference
+	Buffers      map[string]SignalBufferStatus
+}
+
+// SignalBufferStatus captures diagnostic information about a buffered signal.
+type SignalBufferStatus struct {
+	Buffered      int
+	Dropped       uint64
+	LastAggregate SignalAggregate
 }
 
 type ReaderDependencies struct {

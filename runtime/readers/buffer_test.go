@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -159,5 +160,46 @@ func TestSignalBufferConcurrentPush(t *testing.T) {
 	}
 	if got, ok := agg.Value.(float64); !ok || got != expected {
 		t.Fatalf("expected sum %.0f, got %v", expected, agg.Value)
+	}
+}
+
+func TestSignalBufferStatusTracksMetrics(t *testing.T) {
+	buffer, err := NewSignalBuffer("cell", 2, AggregationLast)
+	if err != nil {
+		t.Fatalf("new signal buffer: %v", err)
+	}
+	now := time.Now()
+	if err := buffer.Push(now, 1.0, nil); err != nil {
+		t.Fatalf("push 1: %v", err)
+	}
+	ts := now.Add(time.Millisecond)
+	if err := buffer.Push(ts, 2.0, nil); err != nil {
+		t.Fatalf("push 2: %v", err)
+	}
+	if err := buffer.Push(ts.Add(time.Millisecond), 3.0, nil); !errors.Is(err, ErrSignalBufferOverflow) {
+		t.Fatalf("expected overflow error, got %v", err)
+	}
+	agg, ok, err := buffer.Flush()
+	if err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected aggregated value")
+	}
+	status := buffer.Status()
+	if status.Buffered != agg.Count {
+		t.Fatalf("expected buffered %d, got %d", agg.Count, status.Buffered)
+	}
+	if status.Dropped != 1 {
+		t.Fatalf("expected dropped count 1, got %d", status.Dropped)
+	}
+	if status.LastAggregate.Count != agg.Count {
+		t.Fatalf("expected last aggregate count %d, got %d", agg.Count, status.LastAggregate.Count)
+	}
+	if !status.LastAggregate.Overflow {
+		t.Fatalf("expected overflow flag in last aggregate")
+	}
+	if !status.LastAggregate.Timestamp.Equal(agg.Timestamp) {
+		t.Fatalf("expected timestamp %v, got %v", agg.Timestamp, status.LastAggregate.Timestamp)
 	}
 }

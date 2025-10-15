@@ -12,6 +12,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/timzifer/quarc/config"
+	"github.com/timzifer/quarc/runtime/readers"
 )
 
 type liveViewServer struct {
@@ -67,15 +68,30 @@ type liveWorker struct {
 }
 
 type liveReadGroup struct {
-	ID             string                 `json:"id"`
-	Function       string                 `json:"function"`
-	Start          uint16                 `json:"start"`
-	Length         uint16                 `json:"length"`
-	Disabled       bool                   `json:"disabled"`
-	NextRun        *time.Time             `json:"next_run,omitempty"`
-	LastRun        *time.Time             `json:"last_run,omitempty"`
-	LastDurationMS float64                `json:"last_duration_ms"`
-	Source         config.ModuleReference `json:"source,omitempty"`
+	ID             string                      `json:"id"`
+	Function       string                      `json:"function"`
+	Start          uint16                      `json:"start"`
+	Length         uint16                      `json:"length"`
+	Disabled       bool                        `json:"disabled"`
+	NextRun        *time.Time                  `json:"next_run,omitempty"`
+	LastRun        *time.Time                  `json:"last_run,omitempty"`
+	LastDurationMS float64                     `json:"last_duration_ms"`
+	Source         config.ModuleReference      `json:"source,omitempty"`
+	Buffers        map[string]liveSignalBuffer `json:"buffers,omitempty"`
+}
+
+type liveSignalAggregate struct {
+	Value     interface{} `json:"value,omitempty"`
+	Timestamp *time.Time  `json:"timestamp,omitempty"`
+	Quality   *float64    `json:"quality,omitempty"`
+	Count     int         `json:"count"`
+	Overflow  bool        `json:"overflow"`
+}
+
+type liveSignalBuffer struct {
+	Buffered      int                  `json:"buffered"`
+	Dropped       uint64               `json:"dropped"`
+	LastAggregate *liveSignalAggregate `json:"last_aggregate,omitempty"`
 }
 
 type liveWriteTarget struct {
@@ -135,6 +151,45 @@ func toLiveCell(state CellState) liveCell {
 		UpdatedAt:   state.UpdatedAt,
 		Source:      state.Source,
 	}
+}
+
+func toLiveSignalAggregate(agg readers.SignalAggregate) *liveSignalAggregate {
+	if agg.Count == 0 && agg.Value == nil && agg.Timestamp.IsZero() && agg.Quality == nil && !agg.Overflow {
+		return nil
+	}
+	return &liveSignalAggregate{
+		Value:     agg.Value,
+		Timestamp: timePtr(agg.Timestamp),
+		Quality:   agg.Quality,
+		Count:     agg.Count,
+		Overflow:  agg.Overflow,
+	}
+}
+
+func toLiveReadGroup(status readers.ReadGroupStatus) liveReadGroup {
+	group := liveReadGroup{
+		ID:             status.ID,
+		Function:       status.Function,
+		Start:          status.Start,
+		Length:         status.Length,
+		Disabled:       status.Disabled,
+		NextRun:        timePtr(status.NextRun),
+		LastRun:        timePtr(status.LastRun),
+		LastDurationMS: durationToMillis(status.LastDuration),
+		Source:         status.Source,
+	}
+	if len(status.Buffers) > 0 {
+		buffers := make(map[string]liveSignalBuffer, len(status.Buffers))
+		for cellID, buf := range status.Buffers {
+			buffers[cellID] = liveSignalBuffer{
+				Buffered:      buf.Buffered,
+				Dropped:       buf.Dropped,
+				LastAggregate: toLiveSignalAggregate(buf.LastAggregate),
+			}
+		}
+		group.Buffers = buffers
+	}
+	return group
 }
 
 type controlRequest struct {
@@ -207,17 +262,7 @@ func (s *liveViewServer) handleState(w http.ResponseWriter, r *http.Request) {
 	readStatuses := s.service.ReadStatuses()
 	reads := make([]liveReadGroup, 0, len(readStatuses))
 	for _, status := range readStatuses {
-		reads = append(reads, liveReadGroup{
-			ID:             status.ID,
-			Function:       status.Function,
-			Start:          status.Start,
-			Length:         status.Length,
-			Disabled:       status.Disabled,
-			NextRun:        timePtr(status.NextRun),
-			LastRun:        timePtr(status.LastRun),
-			LastDurationMS: durationToMillis(status.LastDuration),
-			Source:         status.Source,
-		})
+		reads = append(reads, toLiveReadGroup(status))
 	}
 	writeStatuses := s.service.WriteStatuses()
 	writes := make([]liveWriteTarget, 0, len(writeStatuses))
@@ -369,16 +414,7 @@ func (s *liveViewServer) handleReadControl(w http.ResponseWriter, r *http.Reques
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	resp := liveReadGroup{
-		ID:             status.ID,
-		Function:       status.Function,
-		Start:          status.Start,
-		Length:         status.Length,
-		Disabled:       status.Disabled,
-		NextRun:        timePtr(status.NextRun),
-		LastRun:        timePtr(status.LastRun),
-		LastDurationMS: durationToMillis(status.LastDuration),
-	}
+	resp := toLiveReadGroup(status)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		s.logger.Error().Err(err).Str("read", id).Msg("encode read toggle response")
@@ -550,7 +586,7 @@ tr.invalid td { color: #b71c1c; }
 <h2 class="section-title">Reads</h2>
 <table id="reads">
 <thead>
-<tr><th>ID</th><th>Funktion</th><th>Range</th><th>Status</th><th>Nächster Lauf</th><th>Letzte Dauer (ms)</th><th>Aktionen</th></tr>
+<tr><th>ID</th><th>Funktion</th><th>Range</th><th>Status</th><th>Nächster Lauf</th><th>Letzte Dauer (ms)</th><th>Puffer</th><th>Aktionen</th></tr>
 </thead>
 <tbody></tbody>
 </table>
@@ -704,6 +740,44 @@ function stringifyValue(value) {
     }
   }
   return String(value);
+}
+
+function renderReadBuffers(buffers) {
+  if (!buffers || typeof buffers !== 'object') {
+    return '—';
+  }
+  const ids = Object.keys(buffers);
+  if (ids.length === 0) {
+    return '—';
+  }
+  ids.sort();
+  return ids.map(function(cell) {
+    const status = buffers[cell] || {};
+    const buffered = typeof status.buffered === 'number' ? status.buffered : 0;
+    const dropped = typeof status.dropped === 'number' ? status.dropped : 0;
+    let html = '<strong>' + escapeHtml(cell) + '</strong>: ' + escapeHtml('Buffered=' + buffered + ', Dropped=' + dropped);
+    if (status.last_aggregate) {
+      const agg = status.last_aggregate;
+      const parts = [];
+      parts.push('Wert=' + stringifyValue(agg.value));
+      const count = typeof agg.count === 'number' ? agg.count : 0;
+      parts.push('Anzahl=' + count);
+      if (agg.quality !== null && agg.quality !== undefined) {
+        parts.push('Qualität=' + agg.quality);
+      }
+      if (agg.timestamp) {
+        const ts = formatTimestamp(agg.timestamp);
+        if (ts) {
+          parts.push('Zeit=' + ts);
+        }
+      }
+      if (agg.overflow) {
+        parts.push('Overflow');
+      }
+      html += '<br><span class="buffer-details">Letztes: ' + parts.map(function(part) { return escapeHtml(String(part)); }).join(', ') + '</span>';
+    }
+    return '<div class="buffer-status">' + html + '</div>';
+  }).join('');
 }
 
 function formatAccessKind(kind) {
@@ -1257,6 +1331,7 @@ function renderReads(reads) {
     rowHtml += '<td>' + status + '</td>';
     rowHtml += '<td>' + formatTimestamp(read.next_run) + '</td>';
     rowHtml += '<td>' + formatNumber(read.last_duration_ms) + '</td>';
+    rowHtml += '<td>' + renderReadBuffers(read.buffers) + '</td>';
     rowHtml += '<td><button type="button" data-action="toggle-read" data-id="' + read.id + '" data-disabled="' + (read.disabled ? 'true' : 'false') + '">' + (read.disabled ? 'Aktivieren' : 'Pausieren') + '</button></td>';
     tr.innerHTML = rowHtml;
     readsBody.appendChild(tr);

@@ -291,6 +291,36 @@ func (w *stubWriter) Close() {
 	_ = w.client.Close()
 }
 
+type bufferDropRecord struct {
+	group  string
+	buffer string
+	count  uint64
+}
+
+type recordingCollector struct {
+	dropped   []bufferDropRecord
+	occupancy map[string]int
+}
+
+func (recordingCollector) IncHotReload(string) {}
+
+func (c *recordingCollector) IncBufferDropped(group, buffer string, count uint64) {
+	if c == nil || count == 0 {
+		return
+	}
+	c.dropped = append(c.dropped, bufferDropRecord{group: group, buffer: buffer, count: count})
+}
+
+func (c *recordingCollector) SetBufferOccupancy(group, buffer string, occupancy int) {
+	if c == nil {
+		return
+	}
+	if c.occupancy == nil {
+		c.occupancy = make(map[string]int)
+	}
+	c.occupancy[group+":"+buffer] = occupancy
+}
+
 func TestDeterministicCycle(t *testing.T) {
 	client := &fakeClient{}
 	client.readHoldingFn = func(address, quantity uint16) ([]byte, error) {
@@ -678,6 +708,102 @@ func TestServiceClosesRemoteClients(t *testing.T) {
 		if client.closed == 0 {
 			t.Fatalf("expected client %d to be closed", idx)
 		}
+	}
+}
+
+func TestServiceBufferStatusAndTelemetry(t *testing.T) {
+	cfg := &config.Config{
+		Cycle: config.Duration{Duration: time.Millisecond},
+		Cells: []config.CellConfig{{ID: "input", Type: config.ValueKindNumber}},
+		Reads: []config.ReadGroupConfig{{
+			ID:       "rg",
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
+			Function: "holding",
+			Start:    0,
+			Length:   1,
+			Signals: []config.ReadSignalConfig{{
+				Cell:       "input",
+				Offset:     0,
+				Type:       config.ValueKindNumber,
+				BufferSize: 2,
+			}},
+		}},
+	}
+
+	factory := func(config.EndpointConfig) (testClient, error) {
+		client := &fakeClient{}
+		client.readHoldingFn = func(address, quantity uint16) ([]byte, error) {
+			return []byte{0x00, 0x01}, nil
+		}
+		return client, nil
+	}
+
+	logger := zerolog.New(io.Discard)
+	svc, err := New(cfg, logger, stubOptions(factory)...)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	defer svc.Close()
+
+	collector := &recordingCollector{}
+	svc.SetTelemetry(collector)
+
+	buffer, err := svc.buffers.Get("input")
+	if err != nil {
+		t.Fatalf("get buffer: %v", err)
+	}
+	now := time.Now()
+	if err := buffer.Push(now, 1.0, nil); err != nil {
+		t.Fatalf("push 1: %v", err)
+	}
+	if err := buffer.Push(now.Add(time.Millisecond), 2.0, nil); err != nil {
+		t.Fatalf("push 2: %v", err)
+	}
+	thirdTs := now.Add(2 * time.Millisecond)
+	if err := buffer.Push(thirdTs, 3.0, nil); !errors.Is(err, readers.ErrSignalBufferOverflow) {
+		t.Fatalf("expected overflow error, got %v", err)
+	}
+
+	if svc.flushBufferPhase(now.Add(3*time.Millisecond)) == 0 {
+		t.Fatalf("expected flush to report overflow")
+	}
+
+	statuses := svc.ReadStatuses()
+	if len(statuses) != 1 {
+		t.Fatalf("expected single read status, got %d", len(statuses))
+	}
+	bufStatus, ok := statuses[0].Buffers["input"]
+	if !ok {
+		t.Fatalf("buffer status for input missing")
+	}
+	if bufStatus.Buffered != 2 {
+		t.Fatalf("expected buffered count 2, got %d", bufStatus.Buffered)
+	}
+	if bufStatus.Dropped != 1 {
+		t.Fatalf("expected dropped count 1, got %d", bufStatus.Dropped)
+	}
+	if bufStatus.LastAggregate.Count != 2 {
+		t.Fatalf("expected aggregate count 2, got %d", bufStatus.LastAggregate.Count)
+	}
+	if !bufStatus.LastAggregate.Overflow {
+		t.Fatalf("expected aggregate overflow flag")
+	}
+	if bufStatus.LastAggregate.Timestamp.IsZero() || !bufStatus.LastAggregate.Timestamp.Equal(thirdTs) {
+		t.Fatalf("unexpected aggregate timestamp %v", bufStatus.LastAggregate.Timestamp)
+	}
+	if value, ok := bufStatus.LastAggregate.Value.(float64); !ok || value != 3.0 {
+		t.Fatalf("expected aggregate value 3.0, got %v", bufStatus.LastAggregate.Value)
+	}
+
+	if len(collector.dropped) != 1 {
+		t.Fatalf("expected telemetry drop record, got %d", len(collector.dropped))
+	}
+	drop := collector.dropped[0]
+	if drop.group != "rg" || drop.buffer != "input" || drop.count != 1 {
+		t.Fatalf("unexpected drop record: %+v", drop)
+	}
+	if collector.occupancy["rg:input"] != 2 {
+		t.Fatalf("expected occupancy gauge 2, got %d", collector.occupancy["rg:input"])
 	}
 }
 

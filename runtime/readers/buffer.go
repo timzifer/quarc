@@ -66,6 +66,10 @@ type SignalBuffer struct {
 	head     int
 	size     int
 	overflow bool
+	dropped  uint64
+
+	lastBuffered  int
+	lastAggregate SignalAggregate
 }
 
 // NewSignalBuffer constructs a new signal buffer.
@@ -141,6 +145,7 @@ func (b *SignalBuffer) Push(ts time.Time, value interface{}, quality *float64) e
 	b.samples[b.head] = sample
 	b.head = (b.head + 1) % b.capacity
 	b.overflow = true
+	b.dropped++
 	return ErrSignalBufferOverflow
 }
 
@@ -156,6 +161,8 @@ func (b *SignalBuffer) Flush() (SignalAggregate, bool, error) {
 	if b.size == 0 {
 		overflow := b.overflow
 		b.overflow = false
+		b.lastBuffered = 0
+		b.lastAggregate = SignalAggregate{Overflow: overflow}
 		return SignalAggregate{Overflow: overflow}, false, nil
 	}
 
@@ -169,14 +176,31 @@ func (b *SignalBuffer) Flush() (SignalAggregate, bool, error) {
 	b.head = 0
 	b.size = 0
 	b.overflow = false
+	b.lastBuffered = count
 
 	agg, err := aggregateSamples(b.strategy, samples)
 	if err != nil {
+		b.lastAggregate = SignalAggregate{Count: count, Overflow: overflow}
 		return SignalAggregate{}, true, err
 	}
 	agg.Count = count
 	agg.Overflow = overflow
+	b.lastAggregate = agg
 	return agg, true, nil
+}
+
+// Status returns the most recently observed metrics for the buffer.
+func (b *SignalBuffer) Status() SignalBufferStatus {
+	if b == nil {
+		return SignalBufferStatus{}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return SignalBufferStatus{
+		Buffered:      b.lastBuffered,
+		Dropped:       b.dropped,
+		LastAggregate: b.lastAggregate,
+	}
 }
 
 func aggregateSamples(strategy AggregationStrategy, samples []signalSample) (SignalAggregate, error) {
