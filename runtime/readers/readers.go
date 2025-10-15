@@ -40,9 +40,10 @@ type ReadGroupStatus struct {
 
 // SignalBufferStatus captures diagnostic information about a buffered signal.
 type SignalBufferStatus struct {
-	Buffered      int
-	Dropped       uint64
-	LastAggregate SignalAggregate
+	Buffered     int
+	Dropped      uint64
+	Overflow     bool
+	Aggregations map[string]SignalAggregationStatus
 }
 
 type ReaderDependencies struct {

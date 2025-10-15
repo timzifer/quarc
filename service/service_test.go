@@ -782,17 +782,21 @@ func TestServiceBufferStatusAndTelemetry(t *testing.T) {
 	if bufStatus.Dropped != 1 {
 		t.Fatalf("expected dropped count 1, got %d", bufStatus.Dropped)
 	}
-	if bufStatus.LastAggregate.Count != 2 {
-		t.Fatalf("expected aggregate count 2, got %d", bufStatus.LastAggregate.Count)
+	aggStatus, ok := bufStatus.Aggregations["input"]
+	if !ok {
+		t.Fatalf("expected aggregation status for input")
 	}
-	if !bufStatus.LastAggregate.Overflow {
+	if aggStatus.LastAggregate.Count != 2 {
+		t.Fatalf("expected aggregate count 2, got %d", aggStatus.LastAggregate.Count)
+	}
+	if !aggStatus.LastAggregate.Overflow {
 		t.Fatalf("expected aggregate overflow flag")
 	}
-	if bufStatus.LastAggregate.Timestamp.IsZero() || !bufStatus.LastAggregate.Timestamp.Equal(thirdTs) {
-		t.Fatalf("unexpected aggregate timestamp %v", bufStatus.LastAggregate.Timestamp)
+	if aggStatus.LastAggregate.Timestamp.IsZero() || !aggStatus.LastAggregate.Timestamp.Equal(thirdTs) {
+		t.Fatalf("unexpected aggregate timestamp %v", aggStatus.LastAggregate.Timestamp)
 	}
-	if value, ok := bufStatus.LastAggregate.Value.(float64); !ok || value != 3.0 {
-		t.Fatalf("expected aggregate value 3.0, got %v", bufStatus.LastAggregate.Value)
+	if value, ok := aggStatus.LastAggregate.Value.(float64); !ok || value != 3.0 {
+		t.Fatalf("expected aggregate value 3.0, got %v", aggStatus.LastAggregate.Value)
 	}
 
 	if len(collector.dropped) != 1 {

@@ -89,9 +89,18 @@ type liveSignalAggregate struct {
 }
 
 type liveSignalBuffer struct {
-	Buffered      int                  `json:"buffered"`
-	Dropped       uint64               `json:"dropped"`
-	LastAggregate *liveSignalAggregate `json:"last_aggregate,omitempty"`
+	Buffered     int                                    `json:"buffered"`
+	Dropped      uint64                                 `json:"dropped"`
+	Overflow     bool                                   `json:"overflow"`
+	Aggregations map[string]liveSignalAggregationStatus `json:"aggregations,omitempty"`
+}
+
+type liveSignalAggregationStatus struct {
+	Aggregator  string               `json:"aggregator,omitempty"`
+	QualityCell string               `json:"quality_cell,omitempty"`
+	OnOverflow  string               `json:"on_overflow,omitempty"`
+	Last        *liveSignalAggregate `json:"last,omitempty"`
+	Error       string               `json:"error,omitempty"`
 }
 
 type liveWriteTarget struct {
@@ -180,11 +189,22 @@ func toLiveReadGroup(status readers.ReadGroupStatus) liveReadGroup {
 	}
 	if len(status.Buffers) > 0 {
 		buffers := make(map[string]liveSignalBuffer, len(status.Buffers))
-		for cellID, buf := range status.Buffers {
-			buffers[cellID] = liveSignalBuffer{
-				Buffered:      buf.Buffered,
-				Dropped:       buf.Dropped,
-				LastAggregate: toLiveSignalAggregate(buf.LastAggregate),
+		for signalID, buf := range status.Buffers {
+			aggs := make(map[string]liveSignalAggregationStatus, len(buf.Aggregations))
+			for cellID, agg := range buf.Aggregations {
+				aggs[cellID] = liveSignalAggregationStatus{
+					Aggregator:  string(agg.Aggregator),
+					QualityCell: agg.QualityCell,
+					OnOverflow:  agg.OnOverflow,
+					Last:        toLiveSignalAggregate(agg.LastAggregate),
+					Error:       agg.Error,
+				}
+			}
+			buffers[signalID] = liveSignalBuffer{
+				Buffered:     buf.Buffered,
+				Dropped:      buf.Dropped,
+				Overflow:     buf.Overflow,
+				Aggregations: aggs,
 			}
 		}
 		group.Buffers = buffers
@@ -746,37 +766,62 @@ function renderReadBuffers(buffers) {
   if (!buffers || typeof buffers !== 'object') {
     return '—';
   }
-  const ids = Object.keys(buffers);
-  if (ids.length === 0) {
+  const signals = Object.keys(buffers);
+  if (signals.length === 0) {
     return '—';
   }
-  ids.sort();
-  return ids.map(function(cell) {
-    const status = buffers[cell] || {};
+  signals.sort();
+  return signals.map(function(signal) {
+    const status = buffers[signal] || {};
     const buffered = typeof status.buffered === 'number' ? status.buffered : 0;
     const dropped = typeof status.dropped === 'number' ? status.dropped : 0;
-    let html = '<strong>' + escapeHtml(cell) + '</strong>: ' + escapeHtml('Buffered=' + buffered + ', Dropped=' + dropped);
-    if (status.last_aggregate) {
-      const agg = status.last_aggregate;
-      const parts = [];
-      parts.push('Wert=' + stringifyValue(agg.value));
-      const count = typeof agg.count === 'number' ? agg.count : 0;
-      parts.push('Anzahl=' + count);
-      if (agg.quality !== null && agg.quality !== undefined) {
-        parts.push('Qualität=' + agg.quality);
+    let html = '<div class="buffer-status"><div><strong>' + escapeHtml(signal) + '</strong>: ' + escapeHtml('Buffered=' + buffered + ', Dropped=' + dropped);
+    if (status.overflow) {
+      html += ' <span class="buffer-overflow">(Overflow)</span>';
+    }
+    html += '</div>';
+    const aggregations = status.aggregations || {};
+    const aggIds = Object.keys(aggregations);
+    aggIds.sort();
+    aggIds.forEach(function(cell) {
+      const agg = aggregations[cell] || {};
+      const labels = [];
+      labels.push('<strong>' + escapeHtml(cell) + '</strong>');
+      if (agg.aggregator) {
+        labels.push('(' + escapeHtml(agg.aggregator) + ')');
       }
-      if (agg.timestamp) {
-        const ts = formatTimestamp(agg.timestamp);
-        if (ts) {
-          parts.push('Zeit=' + ts);
+      const parts = [];
+      if (agg.last) {
+        const last = agg.last;
+        parts.push('Wert=' + stringifyValue(last.value));
+        const count = typeof last.count === 'number' ? last.count : 0;
+        parts.push('Anzahl=' + count);
+        if (last.quality !== null && last.quality !== undefined) {
+          parts.push('Qualität=' + last.quality);
+        }
+        if (last.timestamp) {
+          const ts = formatTimestamp(last.timestamp);
+          if (ts) {
+            parts.push('Zeit=' + ts);
+          }
+        }
+        if (last.overflow || status.overflow) {
+          parts.push('Overflow');
         }
       }
-      if (agg.overflow) {
-        parts.push('Overflow');
+      if (agg.error) {
+        parts.push('Fehler=' + agg.error);
       }
-      html += '<br><span class="buffer-details">Letztes: ' + parts.map(function(part) { return escapeHtml(String(part)); }).join(', ') + '</span>';
-    }
-    return '<div class="buffer-status">' + html + '</div>';
+      if (agg.quality_cell) {
+        parts.push('Qualität in ' + agg.quality_cell);
+      }
+      if (agg.on_overflow && agg.on_overflow.toLowerCase() === 'ignore') {
+        parts.push('Overflow=ignorieren');
+      }
+      html += '<div class="buffer-details">' + labels.join(' ') + ': ' + parts.map(function(part) { return escapeHtml(String(part)); }).join(', ') + '</div>';
+    });
+    html += '</div>';
+    return html;
   }).join('');
 }
 

@@ -184,7 +184,7 @@ See [`config.example.cue`](config.example.cue) for a complete configuration incl
 
 #### Signal buffers
 
-Each read signal can declare an optional `buffer` block that accumulates values between flushes. The `capacity` controls how many samples are retained, `aggregator` chooses how they collapse into a single value when published (`last`, `sum`, `mean`, `min`, `max`) and `on_overflow` reserves room for overflow policies. Buffers default to a capacity of one and the `last` aggregator when omitted.
+Each read signal can declare an optional `buffer` block that accumulates values between flushes as well as an `aggregations` list describing how buffered samples should be collapsed. The `capacity` controls how many samples are retained while each aggregation chooses a target cell and strategy (`last`, `sum`, `mean`, `min`, `max`, `count`, `queue_length`). Optional `quality` and `on_overflow` fields allow forwarding the aggregated quality to a dedicated cell or suppressing overflow diagnoses (use `"ignore"`). Buffers default to a capacity of one and a single `last` aggregation when omitted.
 
 ```cue
 signals: [
@@ -194,8 +194,13 @@ signals: [
         type: "number"
         buffer: {
             capacity: 60
-            aggregator: "sum"
         }
+        aggregations: [
+            {
+                cell: "temperature_sum"
+                aggregator: "sum"
+            },
+        ]
     },
     {
         cell: "temperature_mean"
@@ -203,8 +208,13 @@ signals: [
         type: "number"
         buffer: {
             capacity: 60
-            aggregator: "mean"
         }
+        aggregations: [
+            {
+                cell: "temperature_mean"
+                aggregator: "mean"
+            },
+        ]
     },
 ]
 ```
