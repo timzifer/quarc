@@ -433,6 +433,7 @@ func (p *Processor) buildRuntime(cfg *config.Config) (*runtimeState, error) {
 		runtime.cleanup()
 		return nil, err
 	}
+	srv.SetTelemetry(p.collector)
 	if p.liveViewEnabled {
 		if err := srv.EnableLiveView(p.liveViewAddr); err != nil {
 			srv.Close()

@@ -15,6 +15,7 @@ import (
 	"github.com/timzifer/quarc/runtime/readers"
 	"github.com/timzifer/quarc/runtime/state"
 	"github.com/timzifer/quarc/runtime/writers"
+	"github.com/timzifer/quarc/telemetry"
 )
 
 // Service implements the deterministic three-phase controller.
@@ -22,20 +23,24 @@ type Service struct {
 	cfg    *config.Config
 	logger zerolog.Logger
 
-	cells       *cellStore
-	snapshots   *snapshotSwitch
-	reads       []readers.ReadGroup
-	buffers     *readers.SignalBufferStore
-	bufferCells map[string]state.Cell
-	logic       []*logicBlock
-	ordered     []*logicBlock
-	writes      []writers.Writer
-	server      *modbusServer
-	programs    []*programBinding
-	workers     workerSlots
+	cells        *cellStore
+	snapshots    *snapshotSwitch
+	reads        []readers.ReadGroup
+	buffers      *readers.SignalBufferStore
+	bufferCells  map[string]state.Cell
+	bufferStatus map[string]readers.SignalBufferStatus
+	bufferGroups map[string][]string
+	bufferOwners map[string]string
+	logic        []*logicBlock
+	ordered      []*logicBlock
+	writes       []writers.Writer
+	server       *modbusServer
+	programs     []*programBinding
+	workers      workerSlots
 
 	metrics       metrics
 	lastCycleTime time.Time
+	telemetry     telemetry.Collector
 
 	controller *cycleController
 	cycle      atomic.Int64
@@ -234,11 +239,15 @@ func New(cfg *config.Config, logger zerolog.Logger, opts ...Option) (*Service, e
 	}
 	slots := newWorkerSlots(cfg.Workers)
 	svc := &Service{
-		cfg:       cfg,
-		logger:    logger,
-		cells:     cells,
-		snapshots: newSnapshotSwitch(len(cfg.Cells)),
-		workers:   slots,
+		cfg:          cfg,
+		logger:       logger,
+		cells:        cells,
+		snapshots:    newSnapshotSwitch(len(cfg.Cells)),
+		workers:      slots,
+		telemetry:    telemetry.Noop(),
+		bufferStatus: make(map[string]readers.SignalBufferStatus),
+		bufferGroups: make(map[string][]string),
+		bufferOwners: make(map[string]string),
 	}
 	svc.load = newSystemLoad(slots)
 	svc.controller = newCycleController(cfg.CycleInterval())
@@ -248,13 +257,30 @@ func New(cfg *config.Config, logger zerolog.Logger, opts ...Option) (*Service, e
 
 	bufferStore := readers.NewSignalBufferStore()
 	deps := readers.ReaderDependencies{Cells: cells, Activity: svc.activity, Buffers: bufferStore}
-	reads, bufferCells, err := buildReadGroups(cfg.Reads, deps, registry.readers)
+	reads, bufferCells, bufferGroups, err := buildReadGroups(cfg.Reads, deps, registry.readers)
 	if err != nil {
 		return nil, err
 	}
 	svc.reads = reads
 	svc.buffers = bufferStore
 	svc.bufferCells = bufferCells
+	if len(bufferGroups) > 0 {
+		svc.bufferGroups = bufferGroups
+		if svc.bufferStatus == nil {
+			svc.bufferStatus = make(map[string]readers.SignalBufferStatus, len(bufferCells))
+		}
+		if svc.bufferOwners == nil {
+			svc.bufferOwners = make(map[string]string, len(bufferCells))
+		}
+		for groupID, cells := range bufferGroups {
+			for _, cellID := range cells {
+				if cellID == "" {
+					continue
+				}
+				svc.bufferOwners[cellID] = groupID
+			}
+		}
+	}
 
 	logic, ordered, err := newLogicBlocks(cfg.Logic, cells, dsl, logger, svc.activity)
 	if err != nil {
@@ -281,22 +307,34 @@ func New(cfg *config.Config, logger zerolog.Logger, opts ...Option) (*Service, e
 	return svc, nil
 }
 
-func buildReadGroups(cfgs []config.ReadGroupConfig, deps readers.ReaderDependencies, factories map[string]readers.ReaderFactory) ([]readers.ReadGroup, map[string]state.Cell, error) {
+func buildReadGroups(cfgs []config.ReadGroupConfig, deps readers.ReaderDependencies, factories map[string]readers.ReaderFactory) ([]readers.ReadGroup, map[string]state.Cell, map[string][]string, error) {
 	groups := make([]readers.ReadGroup, 0, len(cfgs))
 	bufferCells := make(map[string]state.Cell)
+	bufferGroups := make(map[string][]string)
 	for _, cfg := range cfgs {
 		for _, signal := range cfg.Signals {
 			if signal.Cell == "" {
-				return nil, nil, fmt.Errorf("read group %s: signal missing cell", cfg.ID)
+				return nil, nil, nil, fmt.Errorf("read group %s: signal missing cell", cfg.ID)
 			}
 			if deps.Cells == nil {
-				return nil, nil, errors.New("read group dependencies missing cells store")
+				return nil, nil, nil, errors.New("read group dependencies missing cells store")
 			}
 			cell, err := deps.Cells.Get(signal.Cell)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			bufferCells[signal.Cell] = cell
+			cells := bufferGroups[cfg.ID]
+			found := false
+			for _, existing := range cells {
+				if existing == signal.Cell {
+					found = true
+					break
+				}
+			}
+			if !found {
+				bufferGroups[cfg.ID] = append(cells, signal.Cell)
+			}
 			if deps.Buffers != nil {
 				aggName := signal.Aggregation
 				if signal.Buffer != nil && signal.Buffer.Aggregator != "" {
@@ -304,7 +342,7 @@ func buildReadGroups(cfgs []config.ReadGroupConfig, deps readers.ReaderDependenc
 				}
 				strategy, err := readers.ParseAggregationStrategy(aggName)
 				if err != nil {
-					return nil, nil, fmt.Errorf("read group %s signal %s: %w", cfg.ID, signal.Cell, err)
+					return nil, nil, nil, fmt.Errorf("read group %s signal %s: %w", cfg.ID, signal.Cell, err)
 				}
 				size := signal.BufferSize
 				if signal.Buffer != nil && signal.Buffer.Capacity != nil {
@@ -314,26 +352,26 @@ func buildReadGroups(cfgs []config.ReadGroupConfig, deps readers.ReaderDependenc
 					size = 1
 				}
 				if _, err := deps.Buffers.Configure(signal.Cell, size, strategy); err != nil {
-					return nil, nil, fmt.Errorf("read group %s signal %s: %w", cfg.ID, signal.Cell, err)
+					return nil, nil, nil, fmt.Errorf("read group %s signal %s: %w", cfg.ID, signal.Cell, err)
 				}
 			}
 		}
 
 		driver := cfg.Endpoint.Driver
 		if driver == "" {
-			return nil, nil, fmt.Errorf("read group %s: endpoint missing driver", cfg.ID)
+			return nil, nil, nil, fmt.Errorf("read group %s: endpoint missing driver", cfg.ID)
 		}
 		factory := factories[driver]
 		if factory == nil {
-			return nil, nil, fmt.Errorf("read group %s: no reader factory registered for driver %s", cfg.ID, driver)
+			return nil, nil, nil, fmt.Errorf("read group %s: no reader factory registered for driver %s", cfg.ID, driver)
 		}
 		group, err := factory(cfg, deps)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		groups = append(groups, group)
 	}
-	return groups, bufferCells, nil
+	return groups, bufferCells, bufferGroups, nil
 }
 
 func buildWriteTargets(cfgs []config.WriteTargetConfig, deps writers.WriterDependencies, factories map[string]writers.WriterFactory) ([]writers.Writer, error) {
@@ -378,7 +416,7 @@ func Validate(cfg *config.Config, logger zerolog.Logger, opts ...Option) error {
 	if err != nil {
 		return err
 	}
-	if _, _, err := buildReadGroups(cfg.Reads, readers.ReaderDependencies{Cells: cells, Buffers: readers.NewSignalBufferStore()}, registry.readers); err != nil {
+	if _, _, _, err := buildReadGroups(cfg.Reads, readers.ReaderDependencies{Cells: cells, Buffers: readers.NewSignalBufferStore()}, registry.readers); err != nil {
 		return err
 	}
 	if _, _, err := newLogicBlocks(cfg.Logic, cells, dsl, logger, nil); err != nil {
@@ -476,6 +514,8 @@ func (s *Service) flushBufferPhase(now time.Time) int {
 			continue
 		}
 		agg, ok, err := buffer.Flush()
+		bufferStatus := buffer.Status()
+		s.recordBufferStatus(buffer.ID(), bufferStatus)
 		cell := s.lookupBufferCell(buffer.ID())
 		if cell == nil {
 			if err != nil {
@@ -660,6 +700,17 @@ func (s *Service) Metrics() metrics {
 	return s.metrics
 }
 
+// SetTelemetry configures the collector used for runtime metrics emission.
+func (s *Service) SetTelemetry(collector telemetry.Collector) {
+	if s == nil {
+		return
+	}
+	if collector == nil {
+		collector = telemetry.Noop()
+	}
+	s.telemetry = collector
+}
+
 // UpdateCell applies a manual override to a cell when the controller is paused.
 func (s *Service) UpdateCell(id string, value interface{}, hasValue bool, quality *float64, qualitySet bool, valid *bool) (CellState, error) {
 	if s == nil {
@@ -683,12 +734,50 @@ func (s *Service) UpdateCell(id string, value interface{}, hasValue bool, qualit
 	return state, nil
 }
 
+func (s *Service) snapshotReadStatus(base readers.ReadGroupStatus) readers.ReadGroupStatus {
+	if s == nil {
+		return base
+	}
+	cells := s.bufferGroups[base.ID]
+	if len(cells) == 0 {
+		return base
+	}
+	buffers := make(map[string]readers.SignalBufferStatus, len(cells))
+	for _, cellID := range cells {
+		status, ok := s.bufferStatus[cellID]
+		if !ok {
+			status = readers.SignalBufferStatus{}
+		}
+		buffers[cellID] = status
+	}
+	base.Buffers = buffers
+	return base
+}
+
+func (s *Service) recordBufferStatus(bufferID string, status readers.SignalBufferStatus) {
+	if s == nil || bufferID == "" {
+		return
+	}
+	if s.bufferStatus == nil {
+		s.bufferStatus = make(map[string]readers.SignalBufferStatus)
+	}
+	prev := s.bufferStatus[bufferID]
+	s.bufferStatus[bufferID] = status
+	groupID := s.bufferOwners[bufferID]
+	if s.telemetry != nil {
+		if delta := status.Dropped - prev.Dropped; delta > 0 {
+			s.telemetry.IncBufferDropped(groupID, bufferID, delta)
+		}
+		s.telemetry.SetBufferOccupancy(groupID, bufferID, status.Buffered)
+	}
+}
+
 // SetReadGroupDisabled toggles a read group at runtime.
 func (s *Service) SetReadGroupDisabled(id string, disabled bool) (readers.ReadGroupStatus, error) {
 	for _, group := range s.reads {
 		if group.ID() == id {
 			group.SetDisabled(disabled)
-			return group.Status(), nil
+			return s.snapshotReadStatus(group.Status()), nil
 		}
 	}
 	return readers.ReadGroupStatus{}, fmt.Errorf("read group %s not found", id)
@@ -709,7 +798,7 @@ func (s *Service) SetWriteTargetDisabled(id string, disabled bool) (writers.Writ
 func (s *Service) ReadStatuses() []readers.ReadGroupStatus {
 	statuses := make([]readers.ReadGroupStatus, 0, len(s.reads))
 	for _, group := range s.reads {
-		statuses = append(statuses, group.Status())
+		statuses = append(statuses, s.snapshotReadStatus(group.Status()))
 	}
 	sort.Slice(statuses, func(i, j int) bool { return statuses[i].ID < statuses[j].ID })
 	return statuses
