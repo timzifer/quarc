@@ -161,6 +161,61 @@ config: {
 }
 ```
 
+## Live View & Telemetrie
+
+Die Live-View-Oberfläche stellt eine leichtgewichtige Web-UI bereit, mit der sich Zyklen, Zellen, Lese-/Schreibpuffer sowie Programmausführungen in Echtzeit nachvollziehen lassen. Neben Tabellenansichten bietet sie eine Heatmap, die zuletzt aktive Zellen, Logik-Blöcke und Programme hervorhebt und so beim Debugging sowie bei der Inbetriebnahme unterstützt.
+
+**Aktivierung:**
+
+* CLI: `quarc --live-view --live-view-listen=:18080` startet den Server auf Port `18080`. Ohne `--live-view` bleibt die Oberfläche deaktiviert.
+* Embedding/API: Anwendungen, die den Prozessor programmatisch starten, aktivieren den Server über `processor.WithLiveView(host, port)`.
+
+**Konfiguration:**
+
+Die Gestaltung der Heatmap erfolgt über den `live_view`-Abschnitt der CUE-Konfiguration. Das [Beispiel `config.example.cue`](config.example.cue) zeigt den Standardaufbau mit `heatmap.cooldown`- und `heatmap.colors`-Feldern. `cooldown` definiert, wie viele Zyklen Aktivitäten sichtbar bleiben (`cells`, `logic`, `programs`), bevor ein Tile in den `stale`-Zustand zurückfällt. Die Farbpalette legt hervor, wie einzelne Heatmap-Bereiche dargestellt werden:
+
+```cue
+live_view: {
+    heatmap: {
+        cooldown: {
+            cells: 12
+            logic: 12
+            programs: 12
+        }
+        colors: {
+            read: "#4caf50"
+            write: "#ef5350"
+            stale: "#bdbdbd"
+            logic: "#29b6f6"
+            program: "#ab47bc"
+            background: "#f5f5f5"
+            border: "#424242"
+        }
+    }
+}
+```
+
+Die Farben werden 1:1 in der Oberfläche verwendet: Neu geschriebene Zellen nutzen `write`, kürzlich gelesene `read`, inaktive Kacheln `stale`. Für Logik- und Programmkacheln kommen `logic` bzw. `program` zum Einsatz, während Rahmen- und Hintergrundfarben (`border`, `background`) das UI-Theming bestimmen.
+
+**Telemetrie:**
+
+Die Telemetrie wird über den `telemetry`-Block der Konfiguration aktiviert. Ist `enabled` gesetzt und kein eigener Collector registriert, erzeugt QUARC automatisch einen Prometheus-Collector (`provider: "prometheus"` oder leer). Das Beispiel oben setzt standardmäßig `enabled: false`; um Metriken auszugeben, genügt:
+
+```cue
+telemetry: {
+    enabled: true
+    provider: "prometheus"
+}
+```
+
+Der Collector registriert folgende Metriken:
+
+* `quarc_config_hot_reload_total` – Anzahl der erfolgreichen Konfigurations-Neuladevorgänge pro Datei.
+* `quarc_read_buffer_dropped_total` – Summe verwerfener Samples pro Lesegruppe und Puffer (z. B. bei Überläufen).
+* `quarc_read_buffer_occupancy` – Gauge, das die Auslastung jedes Lesepuffers beim letzten Flush meldet.
+
+Eigene Collector-Implementierungen lassen sich per `processor.WithTelemetry(...)` übergeben; andernfalls fällt der Dienst auf einen No-Op-Collector zurück, wenn `enabled` deaktiviert oder ein unbekannter Provider hinterlegt ist.
+
 Short identifiers such as `temperature` are materialised as `plant.core.temperature` once loaded. To refer to a cell from another package, use its fully qualified name directly.
 
 ### Templates and reuse
