@@ -811,6 +811,265 @@ func TestServiceBufferStatusAndTelemetry(t *testing.T) {
 	}
 }
 
+func TestServiceFlushBufferPhaseAppliesAggregations(t *testing.T) {
+	cfg := &config.Config{
+		Cycle: config.Duration{Duration: time.Millisecond},
+		Cells: []config.CellConfig{
+			{ID: "input", Type: config.ValueKindNumber},
+			{ID: "aggregate", Type: config.ValueKindNumber},
+			{ID: "quality", Type: config.ValueKindNumber},
+		},
+		Reads: []config.ReadGroupConfig{{
+			ID:       "rg",
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
+			Function: "holding",
+			Start:    0,
+			Length:   1,
+			Signals: []config.ReadSignalConfig{{
+				Cell:       "input",
+				Offset:     0,
+				Type:       config.ValueKindNumber,
+				BufferSize: 4,
+				Aggregations: []config.ReadSignalAggregationConfig{{
+					Cell:       "aggregate",
+					Aggregator: "sum",
+					Quality:    "quality",
+				}},
+			}},
+		}},
+	}
+
+	factory := func(config.EndpointConfig) (testClient, error) {
+		return &fakeClient{}, nil
+	}
+
+	logger := zerolog.New(io.Discard)
+	svc, err := New(cfg, logger, stubOptions(factory)...)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	defer svc.Close()
+
+	buffer, err := svc.buffers.Get("input")
+	if err != nil {
+		t.Fatalf("get buffer: %v", err)
+	}
+	now := time.Now()
+	q1 := 0.25
+	if err := buffer.Push(now, 1.5, &q1); err != nil {
+		t.Fatalf("push 1: %v", err)
+	}
+	q2 := 0.75
+	if err := buffer.Push(now.Add(time.Millisecond), 2.5, &q2); err != nil {
+		t.Fatalf("push 2: %v", err)
+	}
+
+	if errors := svc.flushBufferPhase(now.Add(2 * time.Millisecond)); errors != 0 {
+		t.Fatalf("expected no flush errors, got %d", errors)
+	}
+
+	aggCell, err := svc.cells.mustGet("aggregate")
+	if err != nil {
+		t.Fatalf("lookup aggregate cell: %v", err)
+	}
+	if value, ok := aggCell.CurrentValue(); !ok {
+		t.Fatalf("expected aggregate value to be set")
+	} else if got, ok := value.(float64); !ok || got != 4.0 {
+		t.Fatalf("expected aggregate value 4.0, got %v", value)
+	}
+	state, err := svc.cells.state("aggregate")
+	if err != nil {
+		t.Fatalf("aggregate state: %v", err)
+	}
+	if state.Diagnosis != nil {
+		t.Fatalf("unexpected aggregate diagnosis: %+v", state.Diagnosis)
+	}
+
+	qualityCell, err := svc.cells.mustGet("quality")
+	if err != nil {
+		t.Fatalf("lookup quality cell: %v", err)
+	}
+	if value, ok := qualityCell.CurrentValue(); !ok {
+		t.Fatalf("expected quality value to be set")
+	} else if got, ok := value.(float64); !ok || got != q2 {
+		t.Fatalf("expected quality value %.2f, got %v", q2, value)
+	}
+}
+
+func TestServiceFlushBufferPhaseHandlesOverflowPolicies(t *testing.T) {
+	cfg := &config.Config{
+		Cycle: config.Duration{Duration: time.Millisecond},
+		Cells: []config.CellConfig{
+			{ID: "input", Type: config.ValueKindNumber},
+			{ID: "overflow", Type: config.ValueKindNumber},
+			{ID: "ignored", Type: config.ValueKindNumber},
+		},
+		Reads: []config.ReadGroupConfig{{
+			ID:       "rg",
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
+			Function: "holding",
+			Start:    0,
+			Length:   1,
+			Signals: []config.ReadSignalConfig{{
+				Cell:       "input",
+				Offset:     0,
+				Type:       config.ValueKindNumber,
+				BufferSize: 2,
+				Aggregations: []config.ReadSignalAggregationConfig{
+					{Cell: "overflow", Aggregator: "last"},
+					{Cell: "ignored", Aggregator: "last", OnOverflow: "ignore"},
+				},
+			}},
+		}},
+	}
+
+	factory := func(config.EndpointConfig) (testClient, error) {
+		return &fakeClient{}, nil
+	}
+
+	logger := zerolog.New(io.Discard)
+	svc, err := New(cfg, logger, stubOptions(factory)...)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	defer svc.Close()
+
+	buffer, err := svc.buffers.Get("input")
+	if err != nil {
+		t.Fatalf("get buffer: %v", err)
+	}
+	now := time.Now()
+	if err := buffer.Push(now, 1.0, nil); err != nil {
+		t.Fatalf("push 1: %v", err)
+	}
+	if err := buffer.Push(now.Add(time.Millisecond), 2.0, nil); err != nil {
+		t.Fatalf("push 2: %v", err)
+	}
+	if err := buffer.Push(now.Add(2*time.Millisecond), 3.0, nil); !errors.Is(err, readers.ErrSignalBufferOverflow) {
+		t.Fatalf("expected overflow error, got %v", err)
+	}
+
+	if errors := svc.flushBufferPhase(now.Add(3 * time.Millisecond)); errors != 1 {
+		t.Fatalf("expected single flush error, got %d", errors)
+	}
+
+	overflowCell, err := svc.cells.mustGet("overflow")
+	if err != nil {
+		t.Fatalf("lookup overflow cell: %v", err)
+	}
+	if value, ok := overflowCell.CurrentValue(); ok {
+		t.Fatalf("expected overflow cell to be invalid, got value %v", value)
+	}
+	overflowState, err := svc.cells.state("overflow")
+	if err != nil {
+		t.Fatalf("overflow state: %v", err)
+	}
+	if overflowState.Diagnosis == nil || overflowState.Diagnosis.Code != diagCodeBufferOverflow {
+		t.Fatalf("expected buffer overflow diagnosis, got %+v", overflowState.Diagnosis)
+	}
+
+	ignoredCell, err := svc.cells.mustGet("ignored")
+	if err != nil {
+		t.Fatalf("lookup ignored cell: %v", err)
+	}
+	if value, ok := ignoredCell.CurrentValue(); !ok {
+		t.Fatalf("expected ignored cell to have value")
+	} else if got, ok := value.(float64); !ok || got != 3.0 {
+		t.Fatalf("expected ignored cell value 3.0, got %v", value)
+	}
+	ignoredState, err := svc.cells.state("ignored")
+	if err != nil {
+		t.Fatalf("ignored state: %v", err)
+	}
+	if ignoredState.Diagnosis != nil {
+		t.Fatalf("expected ignored cell to remain valid, got diagnosis %+v", ignoredState.Diagnosis)
+	}
+}
+
+func TestServiceFlushBufferPhaseAggregationErrorsMarkCellsInvalid(t *testing.T) {
+	cfg := &config.Config{
+		Cycle: config.Duration{Duration: time.Millisecond},
+		Cells: []config.CellConfig{
+			{ID: "input", Type: config.ValueKindString},
+			{ID: "sum", Type: config.ValueKindNumber},
+			{ID: "last", Type: config.ValueKindString},
+		},
+		Reads: []config.ReadGroupConfig{{
+			ID:       "rg",
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
+			Function: "holding",
+			Start:    0,
+			Length:   1,
+			Signals: []config.ReadSignalConfig{{
+				Cell:       "input",
+				Offset:     0,
+				Type:       config.ValueKindString,
+				BufferSize: 2,
+				Aggregations: []config.ReadSignalAggregationConfig{
+					{Cell: "sum", Aggregator: "sum"},
+					{Cell: "last", Aggregator: "last"},
+				},
+			}},
+		}},
+	}
+
+	factory := func(config.EndpointConfig) (testClient, error) {
+		return &fakeClient{}, nil
+	}
+
+	logger := zerolog.New(io.Discard)
+	svc, err := New(cfg, logger, stubOptions(factory)...)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	defer svc.Close()
+
+	buffer, err := svc.buffers.Get("input")
+	if err != nil {
+		t.Fatalf("get buffer: %v", err)
+	}
+	now := time.Now()
+	if err := buffer.Push(now, "not-a-number", nil); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	if errors := svc.flushBufferPhase(now.Add(time.Millisecond)); errors != 1 {
+		t.Fatalf("expected single flush error, got %d", errors)
+	}
+
+	sumCell, err := svc.cells.mustGet("sum")
+	if err != nil {
+		t.Fatalf("lookup sum cell: %v", err)
+	}
+	if value, ok := sumCell.CurrentValue(); ok {
+		t.Fatalf("expected sum cell to be invalid, got value %v", value)
+	}
+	sumState, err := svc.cells.state("sum")
+	if err != nil {
+		t.Fatalf("sum state: %v", err)
+	}
+	if sumState.Diagnosis == nil || sumState.Diagnosis.Code != diagCodeAggregationError {
+		t.Fatalf("expected aggregation error diagnosis, got %+v", sumState.Diagnosis)
+	}
+
+	lastCell, err := svc.cells.mustGet("last")
+	if err != nil {
+		t.Fatalf("lookup last cell: %v", err)
+	}
+	if value, ok := lastCell.CurrentValue(); !ok {
+		t.Fatalf("expected last cell to have value")
+	} else if got, ok := value.(string); !ok || got != "not-a-number" {
+		t.Fatalf("expected last cell to retain value, got %v", value)
+	}
+	lastState, err := svc.cells.state("last")
+	if err != nil {
+		t.Fatalf("last state: %v", err)
+	}
+	if lastState.Diagnosis != nil {
+		t.Fatalf("expected last cell to remain valid, got diagnosis %+v", lastState.Diagnosis)
+	}
+}
+
 func TestNewProgramBindingsDetectsDuplicateOutputs(t *testing.T) {
 	logger := zerolog.New(io.Discard)
 	makeCells := func() *cellStore {
