@@ -5,12 +5,18 @@ on:
     branches: [ main ]
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
   test:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -36,3 +42,40 @@ jobs:
         run: |
           echo "## Coverage" >> "$GITHUB_STEP_SUMMARY"
           echo "Total: ${{ steps.coverage.outputs.percentage }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Update coverage badge
+        if: github.ref == 'refs/heads/main'
+        env:
+          PERCENTAGE: ${{ steps.coverage.outputs.percentage }}
+        run: |
+          percent_no_symbol="${PERCENTAGE%%%}"
+          percent_integer=${percent_no_symbol%.*}
+          if [ -z "$percent_integer" ]; then
+            percent_integer=0
+          fi
+          if [ "$percent_integer" -ge 90 ]; then
+            color="brightgreen"
+          elif [ "$percent_integer" -ge 75 ]; then
+            color="yellow"
+          elif [ "$percent_integer" -ge 60 ]; then
+            color="orange"
+          else
+            color="red"
+          fi
+
+          cat <<BADGE > docs/coverage-badge.json
+{
+  "schemaVersion": 1,
+  "label": "coverage",
+  "message": "${PERCENTAGE}",
+  "color": "${color}"
+}
+BADGE
+
+          if git status --porcelain docs/coverage-badge.json | grep -q .; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add docs/coverage-badge.json
+            git commit -m "Update coverage badge [skip ci]"
+            git push
+          fi
