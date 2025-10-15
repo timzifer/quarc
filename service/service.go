@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -312,6 +313,14 @@ func buildReadGroups(cfgs []config.ReadGroupConfig, deps readers.ReaderDependenc
 	bufferCells := make(map[string]state.Cell)
 	bufferGroups := make(map[string][]string)
 	for _, cfg := range cfgs {
+		addCell := func(list []string, id string) []string {
+			for _, existing := range list {
+				if existing == id {
+					return list
+				}
+			}
+			return append(list, id)
+		}
 		for _, signal := range cfg.Signals {
 			if signal.Cell == "" {
 				return nil, nil, nil, fmt.Errorf("read group %s: signal missing cell", cfg.ID)
@@ -324,26 +333,8 @@ func buildReadGroups(cfgs []config.ReadGroupConfig, deps readers.ReaderDependenc
 				return nil, nil, nil, err
 			}
 			bufferCells[signal.Cell] = cell
-			cells := bufferGroups[cfg.ID]
-			found := false
-			for _, existing := range cells {
-				if existing == signal.Cell {
-					found = true
-					break
-				}
-			}
-			if !found {
-				bufferGroups[cfg.ID] = append(cells, signal.Cell)
-			}
+			bufferGroups[cfg.ID] = addCell(bufferGroups[cfg.ID], signal.Cell)
 			if deps.Buffers != nil {
-				aggName := signal.Aggregation
-				if signal.Buffer != nil && signal.Buffer.Aggregator != "" {
-					aggName = signal.Buffer.Aggregator
-				}
-				strategy, err := readers.ParseAggregationStrategy(aggName)
-				if err != nil {
-					return nil, nil, nil, fmt.Errorf("read group %s signal %s: %w", cfg.ID, signal.Cell, err)
-				}
 				size := signal.BufferSize
 				if signal.Buffer != nil && signal.Buffer.Capacity != nil {
 					size = *signal.Buffer.Capacity
@@ -351,7 +342,35 @@ func buildReadGroups(cfgs []config.ReadGroupConfig, deps readers.ReaderDependenc
 				if size <= 0 {
 					size = 1
 				}
-				if _, err := deps.Buffers.Configure(signal.Cell, size, strategy); err != nil {
+				aggCfgs := make([]readers.SignalBufferAggregationConfig, 0, len(signal.Aggregations))
+				for _, agg := range signal.Aggregations {
+					strategy, err := readers.ParseAggregationStrategy(agg.Aggregator)
+					if err != nil {
+						return nil, nil, nil, fmt.Errorf("read group %s signal %s aggregation %s: %w", cfg.ID, signal.Cell, agg.Cell, err)
+					}
+					aggCfgs = append(aggCfgs, readers.SignalBufferAggregationConfig{
+						Cell:        agg.Cell,
+						Strategy:    strategy,
+						QualityCell: agg.Quality,
+						OnOverflow:  agg.OnOverflow,
+					})
+					aggCell, err := deps.Cells.Get(agg.Cell)
+					if err != nil {
+						return nil, nil, nil, err
+					}
+					bufferCells[agg.Cell] = aggCell
+					if quality := agg.Quality; quality != "" {
+						qualityCell, err := deps.Cells.Get(quality)
+						if err != nil {
+							return nil, nil, nil, err
+						}
+						bufferCells[quality] = qualityCell
+					}
+				}
+				if len(aggCfgs) == 0 {
+					aggCfgs = append(aggCfgs, readers.SignalBufferAggregationConfig{Cell: signal.Cell})
+				}
+				if _, err := deps.Buffers.Configure(signal.Cell, size, aggCfgs); err != nil {
 					return nil, nil, nil, fmt.Errorf("read group %s signal %s: %w", cfg.ID, signal.Cell, err)
 				}
 			}
@@ -513,44 +532,61 @@ func (s *Service) flushBufferPhase(now time.Time) int {
 		if buffer == nil {
 			continue
 		}
-		agg, ok, err := buffer.Flush()
+		res, err := buffer.Flush()
 		bufferStatus := buffer.Status()
 		s.recordBufferStatus(buffer.ID(), bufferStatus)
-		cell := s.lookupBufferCell(buffer.ID())
-		if cell == nil {
-			if err != nil {
-				errors++
-			}
-			continue
-		}
 		if err != nil {
-			cell.MarkInvalid(now, diagCodeAggregationError, err.Error())
 			errors++
 			continue
 		}
-		if !ok {
-			if agg.Overflow {
-				cell.MarkInvalid(now, diagCodeBufferOverflow, fmt.Sprintf("signal buffer overflow for cell %s", buffer.ID()))
-				errors++
+		for cellID, agg := range res.Aggregations {
+			cell := s.lookupBufferCell(cellID)
+			if cell == nil {
+				if agg.Err != nil {
+					errors++
+				}
+				continue
 			}
-			continue
-		}
-		ts := agg.Timestamp
-		if ts.IsZero() {
-			ts = now
-		}
-		if agg.Overflow {
-			cell.MarkInvalid(ts, diagCodeBufferOverflow, fmt.Sprintf("signal buffer overflow for cell %s", buffer.ID()))
-			errors++
-			continue
-		}
-		if err := cell.SetValue(agg.Value, ts, agg.Quality); err != nil {
-			cell.MarkInvalid(ts, diagCodeAggregationError, err.Error())
-			errors++
-			continue
-		}
-		if s.activity != nil {
-			s.activity.RecordCellRead(buffer.ID(), "read", ts)
+			ts := agg.Aggregate.Timestamp
+			if ts.IsZero() {
+				ts = now
+			}
+			if !agg.HasValue {
+				if res.Overflow || agg.Aggregate.Overflow {
+					if !strings.EqualFold(agg.OnOverflow, "ignore") {
+						cell.MarkInvalid(ts, diagCodeBufferOverflow, fmt.Sprintf("signal buffer overflow for cell %s", cellID))
+						errors++
+					}
+				}
+				continue
+			}
+			if agg.Err != nil {
+				cell.MarkInvalid(ts, diagCodeAggregationError, agg.Err.Error())
+				errors++
+				continue
+			}
+			overflow := res.Overflow || agg.Aggregate.Overflow
+			if overflow && !strings.EqualFold(agg.OnOverflow, "ignore") {
+				cell.MarkInvalid(ts, diagCodeBufferOverflow, fmt.Sprintf("signal buffer overflow for cell %s", cellID))
+				errors++
+				continue
+			}
+			if err := cell.SetValue(agg.Aggregate.Value, ts, agg.Aggregate.Quality); err != nil {
+				cell.MarkInvalid(ts, diagCodeAggregationError, err.Error())
+				errors++
+				continue
+			}
+			if qualityCellID := agg.QualityCell; qualityCellID != "" && agg.Aggregate.Quality != nil {
+				qualityCell := s.lookupBufferCell(qualityCellID)
+				if qualityCell != nil {
+					if err := qualityCell.SetValue(*agg.Aggregate.Quality, ts, nil); err != nil {
+						qualityCell.MarkInvalid(ts, diagCodeAggregationError, err.Error())
+					}
+				}
+			}
+			if s.activity != nil {
+				s.activity.RecordCellRead(cellID, "read", ts)
+			}
 		}
 	}
 	return errors

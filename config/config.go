@@ -76,11 +76,13 @@ const (
 )
 
 var allowedSignalAggregators = map[string]struct{}{
-	"last": {},
-	"sum":  {},
-	"mean": {},
-	"min":  {},
-	"max":  {},
+	"last":         {},
+	"sum":          {},
+	"mean":         {},
+	"min":          {},
+	"max":          {},
+	"count":        {},
+	"queue_length": {},
 }
 
 // EndpointConfig describes how to reach a Modbus slave.
@@ -115,22 +117,31 @@ type CellConfig struct {
 
 // ReadSignalConfig maps a portion of a Modbus read block into a cell.
 type ReadSignalConfig struct {
-	Cell        string              `json:"cell"`
-	Offset      uint16              `json:"offset"`
-	Bit         *uint8              `json:"bit,omitempty"`
-	Type        ValueKind           `json:"type"`
-	Scale       float64             `json:"scale,omitempty"`
-	Endianness  string              `json:"endianness,omitempty"`
-	Signed      bool                `json:"signed,omitempty"`
-	Aggregation string              `json:"aggregation,omitempty"`
-	BufferSize  int                 `json:"buffer_size,omitempty"`
-	Buffer      *SignalBufferConfig `json:"buffer,omitempty"`
+	Cell         string                        `json:"cell"`
+	Offset       uint16                        `json:"offset"`
+	Bit          *uint8                        `json:"bit,omitempty"`
+	Type         ValueKind                     `json:"type"`
+	Scale        float64                       `json:"scale,omitempty"`
+	Endianness   string                        `json:"endianness,omitempty"`
+	Signed       bool                          `json:"signed,omitempty"`
+	Aggregation  string                        `json:"aggregation,omitempty"`
+	BufferSize   int                           `json:"buffer_size,omitempty"`
+	Buffer       *SignalBufferConfig           `json:"buffer,omitempty"`
+	Aggregations []ReadSignalAggregationConfig `json:"aggregations,omitempty"`
 }
 
 // SignalBufferConfig controls buffering behaviour for a read signal.
 type SignalBufferConfig struct {
 	Capacity   *int   `json:"capacity,omitempty"`
 	Aggregator string `json:"aggregator,omitempty"`
+	OnOverflow string `json:"on_overflow,omitempty"`
+}
+
+// ReadSignalAggregationConfig configures an aggregate output for a buffered signal.
+type ReadSignalAggregationConfig struct {
+	Cell       string `json:"cell"`
+	Aggregator string `json:"aggregator,omitempty"`
+	Quality    string `json:"quality,omitempty"`
 	OnOverflow string `json:"on_overflow,omitempty"`
 }
 
@@ -462,24 +473,67 @@ func normalizeSignalBuffers(cfg *Config) {
 				if signal.Buffer.Capacity != nil {
 					signal.BufferSize = *signal.Buffer.Capacity
 				}
-				if agg := strings.TrimSpace(signal.Buffer.Aggregator); agg != "" {
-					signal.Buffer.Aggregator = agg
-					signal.Aggregation = agg
-				}
-				continue
+				signal.Buffer.Aggregator = strings.TrimSpace(signal.Buffer.Aggregator)
+				signal.Buffer.OnOverflow = strings.TrimSpace(signal.Buffer.OnOverflow)
 			}
-			agg := strings.TrimSpace(signal.Aggregation)
-			var capPtr *int
-			if signal.BufferSize > 0 {
-				cap := signal.BufferSize
-				capPtr = &cap
+			aggName := strings.TrimSpace(signal.Aggregation)
+			if aggName != "" {
+				signal.Aggregation = aggName
 			}
-			if agg != "" || capPtr != nil {
-				signal.Buffer = &SignalBufferConfig{
-					Capacity:   capPtr,
-					Aggregator: agg,
+			if signal.Buffer == nil {
+				var capPtr *int
+				if signal.BufferSize > 0 {
+					cap := signal.BufferSize
+					capPtr = &cap
 				}
-				signal.Aggregation = agg
+				if aggName != "" || capPtr != nil {
+					signal.Buffer = &SignalBufferConfig{Capacity: capPtr, Aggregator: aggName}
+				}
+			}
+			if signal.Buffer != nil {
+				if signal.Buffer.Aggregator != "" {
+					aggName = signal.Buffer.Aggregator
+				}
+				if signal.Buffer.Capacity == nil && signal.BufferSize > 0 {
+					cap := signal.BufferSize
+					signal.Buffer.Capacity = &cap
+				}
+			}
+			if len(signal.Aggregations) == 0 {
+				target := strings.TrimSpace(signal.Cell)
+				aggregation := ReadSignalAggregationConfig{
+					Cell:       target,
+					Aggregator: aggName,
+				}
+				if signal.Buffer != nil {
+					aggregation.OnOverflow = signal.Buffer.OnOverflow
+				}
+				signal.Aggregations = append(signal.Aggregations, aggregation)
+			}
+			for k := range signal.Aggregations {
+				agg := &signal.Aggregations[k]
+				agg.Cell = strings.TrimSpace(agg.Cell)
+				if agg.Cell == "" {
+					agg.Cell = strings.TrimSpace(signal.Cell)
+				}
+				agg.Aggregator = strings.TrimSpace(agg.Aggregator)
+				if agg.Aggregator == "" {
+					agg.Aggregator = aggName
+				}
+				agg.Quality = strings.TrimSpace(agg.Quality)
+				agg.OnOverflow = strings.TrimSpace(agg.OnOverflow)
+				if agg.OnOverflow == "" && signal.Buffer != nil {
+					agg.OnOverflow = signal.Buffer.OnOverflow
+				}
+			}
+			if len(signal.Aggregations) > 0 {
+				agg := signal.Aggregations[0]
+				if agg.Aggregator != "" {
+					signal.Aggregation = agg.Aggregator
+					if signal.Buffer != nil && signal.Buffer.Aggregator == "" {
+						signal.Buffer.Aggregator = agg.Aggregator
+					}
+				}
 			}
 		}
 	}
@@ -491,6 +545,19 @@ func validateSignalBuffers(cfg *Config) error {
 	}
 	for _, read := range cfg.Reads {
 		for _, signal := range read.Signals {
+			if len(signal.Aggregations) == 0 {
+				return fmt.Errorf("read group %s signal %s: at least one aggregation is required", read.ID, signal.Cell)
+			}
+			for _, aggCfg := range signal.Aggregations {
+				if aggCfg.Cell == "" {
+					return fmt.Errorf("read group %s signal %s: aggregation missing cell", read.ID, signal.Cell)
+				}
+				if agg := strings.TrimSpace(aggCfg.Aggregator); agg != "" {
+					if !isAllowedSignalAggregator(agg) {
+						return fmt.Errorf("read group %s signal %s aggregation %s: unsupported aggregation %q", read.ID, signal.Cell, aggCfg.Cell, agg)
+					}
+				}
+			}
 			if agg := strings.TrimSpace(signal.Aggregation); agg != "" {
 				if !isAllowedSignalAggregator(agg) {
 					return fmt.Errorf("read group %s signal %s: unsupported aggregation %q", read.ID, signal.Cell, agg)
@@ -551,6 +618,10 @@ func qualifyConfig(cfg *Config, pkg string) {
 		cfg.Reads[i].ID = qualifyID(cfg.Reads[i].ID)
 		for j := range cfg.Reads[i].Signals {
 			cfg.Reads[i].Signals[j].Cell = qualifyRef(cfg.Reads[i].Signals[j].Cell)
+			for k := range cfg.Reads[i].Signals[j].Aggregations {
+				cfg.Reads[i].Signals[j].Aggregations[k].Cell = qualifyRef(cfg.Reads[i].Signals[j].Aggregations[k].Cell)
+				cfg.Reads[i].Signals[j].Aggregations[k].Quality = qualifyRef(cfg.Reads[i].Signals[j].Aggregations[k].Quality)
+			}
 		}
 		if cfg.Reads[i].CAN != nil {
 			for j := range cfg.Reads[i].CAN.Frames {

@@ -135,6 +135,10 @@ config: {
             id: "temperature_mean"
             unit: "°C"
         },
+        template.analogCell & {
+            id: "temperature_queue"
+            unit: "samples"
+        },
         {
             id: "heater_enabled"
             type: "bool"
@@ -193,6 +197,11 @@ config: {
                     offset: 0
                     type: "number"
                     scale: 0.1
+                    aggregations: [
+                        {
+                            cell: "raw_temperature"
+                        },
+                    ]
                 },
                 {
                     cell: "temperature_sum"
@@ -201,8 +210,13 @@ config: {
                     scale: 0.1
                     buffer: {
                         capacity: 60
-                        aggregator: "sum"
                     }
+                    aggregations: [
+                        {
+                            cell: "temperature_sum"
+                            aggregator: "sum"
+                        },
+                    ]
                 },
                 {
                     cell: "temperature_mean"
@@ -211,8 +225,28 @@ config: {
                     scale: 0.1
                     buffer: {
                         capacity: 60
-                        aggregator: "mean"
                     }
+                    aggregations: [
+                        {
+                            cell: "temperature_mean"
+                            aggregator: "mean"
+                        },
+                    ]
+                },
+                {
+                    cell: "temperature_queue"
+                    offset: 0
+                    type: "number"
+                    scale: 0.1
+                    buffer: {
+                        capacity: 60
+                    }
+                    aggregations: [
+                        {
+                            cell: "temperature_queue"
+                            aggregator: "queue_length"
+                        },
+                    ]
                 },
             ]
         },

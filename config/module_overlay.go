@@ -95,13 +95,22 @@ const moduleOverlayContent = `package module
     aggregation?: string
     buffer_size?: int
     buffer?: #SignalBuffer
+    aggregations?: [...#SignalAggregation]
     metadata?: _
     ...
 }
 
 #SignalBuffer: {
     capacity?: int
-    aggregator?: *"last" | "sum" | "mean" | "min" | "max"
+    aggregator?: *"last" | "sum" | "mean" | "min" | "max" | "count" | "queue_length"
+    on_overflow?: string
+    ...
+}
+
+#SignalAggregation: {
+    cell: string
+    aggregator?: *"last" | "sum" | "mean" | "min" | "max" | "count" | "queue_length"
+    quality?: string
     on_overflow?: string
     ...
 }

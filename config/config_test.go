@@ -406,6 +406,12 @@ config: {
                         capacity: 8
                         aggregator: "sum"
                     }
+                    aggregations: [
+                        {
+                            cell: "temperature"
+                            aggregator: "sum"
+                        },
+                    ]
                 },
             ]
         },
@@ -432,6 +438,12 @@ config: {
 	signal := signals[0]
 	if signal.Aggregation != "sum" {
 		t.Fatalf("expected aggregation sum, got %q", signal.Aggregation)
+	}
+	if len(signal.Aggregations) != 1 {
+		t.Fatalf("expected 1 aggregation, got %d", len(signal.Aggregations))
+	}
+	if agg := signal.Aggregations[0]; agg.Cell != "plant.core.temperature" || agg.Aggregator != "sum" {
+		t.Fatalf("unexpected aggregation config: %#v", agg)
 	}
 	if signal.BufferSize != 8 {
 		t.Fatalf("expected buffer size 8, got %d", signal.BufferSize)
@@ -483,6 +495,12 @@ config: {
                         capacity: 4
                         aggregator: "invalid"
                     }
+                    aggregations: [
+                        {
+                            cell: "temperature"
+                            aggregator: "invalid"
+                        },
+                    ]
                 },
             ]
         },
@@ -534,6 +552,12 @@ config: {
                     buffer: {
                         capacity: 0
                     }
+                    aggregations: [
+                        {
+                            cell: "temperature"
+                            aggregator: "sum"
+                        },
+                    ]
                 },
             ]
         },
