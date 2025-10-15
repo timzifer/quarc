@@ -127,6 +127,14 @@ config: {
             id: "temperature_c"
             unit: "°C"
         },
+        template.analogCell & {
+            id: "temperature_sum"
+            unit: "°C·samples"
+        },
+        template.analogCell & {
+            id: "temperature_mean"
+            unit: "°C"
+        },
         {
             id: "heater_enabled"
             type: "bool"
@@ -185,6 +193,26 @@ config: {
                     offset: 0
                     type: "number"
                     scale: 0.1
+                },
+                {
+                    cell: "temperature_sum"
+                    offset: 0
+                    type: "number"
+                    scale: 0.1
+                    buffer: {
+                        capacity: 60
+                        aggregator: "sum"
+                    }
+                },
+                {
+                    cell: "temperature_mean"
+                    offset: 0
+                    type: "number"
+                    scale: 0.1
+                    buffer: {
+                        capacity: 60
+                        aggregator: "mean"
+                    }
                 },
             ]
         },

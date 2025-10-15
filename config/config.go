@@ -75,6 +75,14 @@ const (
 	ValueKindDate ValueKind = "date"
 )
 
+var allowedSignalAggregators = map[string]struct{}{
+	"last": {},
+	"sum":  {},
+	"mean": {},
+	"min":  {},
+	"max":  {},
+}
+
 // EndpointConfig describes how to reach a Modbus slave.
 type EndpointConfig struct {
 	Address string   `json:"address"`
@@ -107,15 +115,23 @@ type CellConfig struct {
 
 // ReadSignalConfig maps a portion of a Modbus read block into a cell.
 type ReadSignalConfig struct {
-	Cell        string    `json:"cell"`
-	Offset      uint16    `json:"offset"`
-	Bit         *uint8    `json:"bit,omitempty"`
-	Type        ValueKind `json:"type"`
-	Scale       float64   `json:"scale,omitempty"`
-	Endianness  string    `json:"endianness,omitempty"`
-	Signed      bool      `json:"signed,omitempty"`
-	Aggregation string    `json:"aggregation,omitempty"`
-	BufferSize  int       `json:"buffer_size,omitempty"`
+	Cell        string              `json:"cell"`
+	Offset      uint16              `json:"offset"`
+	Bit         *uint8              `json:"bit,omitempty"`
+	Type        ValueKind           `json:"type"`
+	Scale       float64             `json:"scale,omitempty"`
+	Endianness  string              `json:"endianness,omitempty"`
+	Signed      bool                `json:"signed,omitempty"`
+	Aggregation string              `json:"aggregation,omitempty"`
+	BufferSize  int                 `json:"buffer_size,omitempty"`
+	Buffer      *SignalBufferConfig `json:"buffer,omitempty"`
+}
+
+// SignalBufferConfig controls buffering behaviour for a read signal.
+type SignalBufferConfig struct {
+	Capacity   *int   `json:"capacity,omitempty"`
+	Aggregator string `json:"aggregator,omitempty"`
+	OnOverflow string `json:"on_overflow,omitempty"`
 }
 
 // ReadGroupConfig describes a block read.
@@ -414,8 +430,12 @@ func decodeInstance(path string, inst *cue.Instance) (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
+	normalizeSignalBuffers(&cfg)
 	meta := ModuleReference{File: path, Name: cfg.Name, Description: cfg.Description, Package: pkgName}
 	cfg.setSource(meta)
+	if err := validateSignalBuffers(&cfg); err != nil {
+		return nil, err
+	}
 	qualifyConfig(&cfg, pkgName)
 	if err := validateConfigIdentifiers(&cfg); err != nil {
 		return nil, err
@@ -429,6 +449,79 @@ func (c *Config) CycleInterval() time.Duration {
 		return 500 * time.Millisecond
 	}
 	return c.Cycle.Duration
+}
+
+func normalizeSignalBuffers(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	for i := range cfg.Reads {
+		for j := range cfg.Reads[i].Signals {
+			signal := &cfg.Reads[i].Signals[j]
+			if signal.Buffer != nil {
+				if signal.Buffer.Capacity != nil {
+					signal.BufferSize = *signal.Buffer.Capacity
+				}
+				if agg := strings.TrimSpace(signal.Buffer.Aggregator); agg != "" {
+					signal.Buffer.Aggregator = agg
+					signal.Aggregation = agg
+				}
+				continue
+			}
+			agg := strings.TrimSpace(signal.Aggregation)
+			var capPtr *int
+			if signal.BufferSize > 0 {
+				cap := signal.BufferSize
+				capPtr = &cap
+			}
+			if agg != "" || capPtr != nil {
+				signal.Buffer = &SignalBufferConfig{
+					Capacity:   capPtr,
+					Aggregator: agg,
+				}
+				signal.Aggregation = agg
+			}
+		}
+	}
+}
+
+func validateSignalBuffers(cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+	for _, read := range cfg.Reads {
+		for _, signal := range read.Signals {
+			if agg := strings.TrimSpace(signal.Aggregation); agg != "" {
+				if !isAllowedSignalAggregator(agg) {
+					return fmt.Errorf("read group %s signal %s: unsupported aggregation %q", read.ID, signal.Cell, agg)
+				}
+			}
+			if signal.Buffer != nil {
+				if signal.Buffer.Capacity != nil {
+					if *signal.Buffer.Capacity <= 0 {
+						return fmt.Errorf("read group %s signal %s: buffer capacity must be positive", read.ID, signal.Cell)
+					}
+				}
+				if agg := strings.TrimSpace(signal.Buffer.Aggregator); agg != "" {
+					if !isAllowedSignalAggregator(agg) {
+						return fmt.Errorf("read group %s signal %s: unsupported buffer aggregator %q", read.ID, signal.Cell, agg)
+					}
+				}
+			}
+			if signal.BufferSize < 0 {
+				return fmt.Errorf("read group %s signal %s: buffer size must not be negative", read.ID, signal.Cell)
+			}
+		}
+	}
+	return nil
+}
+
+func isAllowedSignalAggregator(value string) bool {
+	if value == "" {
+		return true
+	}
+	_, ok := allowedSignalAggregators[value]
+	return ok
 }
 
 func qualifyConfig(cfg *Config, pkg string) {

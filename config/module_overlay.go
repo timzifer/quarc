@@ -32,7 +32,7 @@ const moduleOverlayContent = `package module
     hot_reload?: bool
     programs?: [...#Program]
     cells?: [...#Cell]
-    reads?: [..._]
+    reads?: [...#Read]
     writes?: [..._]
     logic?: [..._]
     ...
@@ -66,6 +66,43 @@ const moduleOverlayContent = `package module
     scale?: number
     signed?: bool
     metadata?: _
+    ...
+}
+
+#Read: {
+    id: string
+    endpoint: _
+    function: string
+    start: int
+    length: int
+    ttl?: string
+    signals: [...#ReadSignal]
+    disable?: bool
+    can?: _
+    driver_settings?: _
+    metadata?: _
+    ...
+}
+
+#ReadSignal: {
+    cell: string
+    offset: int
+    type: string
+    bit?: int
+    scale?: number
+    endianness?: string
+    signed?: bool
+    aggregation?: string
+    buffer_size?: int
+    buffer?: #SignalBuffer
+    metadata?: _
+    ...
+}
+
+#SignalBuffer: {
+    capacity?: int
+    aggregator?: *"last" | "sum" | "mean" | "min" | "max"
+    on_overflow?: string
     ...
 }
 `

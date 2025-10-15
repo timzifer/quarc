@@ -182,6 +182,33 @@ Place additional `.cue` files in the same directory or import reusable packages.
 
 See [`config.example.cue`](config.example.cue) for a complete configuration including reads, programs and writes.
 
+#### Signal buffers
+
+Each read signal can declare an optional `buffer` block that accumulates values between flushes. The `capacity` controls how many samples are retained, `aggregator` chooses how they collapse into a single value when published (`last`, `sum`, `mean`, `min`, `max`) and `on_overflow` reserves room for overflow policies. Buffers default to a capacity of one and the `last` aggregator when omitted.
+
+```cue
+signals: [
+    {
+        cell: "temperature_sum"
+        offset: 0
+        type: "number"
+        buffer: {
+            capacity: 60
+            aggregator: "sum"
+        }
+    },
+    {
+        cell: "temperature_mean"
+        offset: 0
+        type: "number"
+        buffer: {
+            capacity: 60
+            aggregator: "mean"
+        }
+    },
+]
+```
+
 ### Reusable programs
 
 Programs encapsulate common control algorithms such as PID regulators, ramp generators, slew limiters, timers, counters, filters, selection logic, latches, runtime/energy tracking, sequencers and alarm supervision. Each entry in the `programs` list declares:
