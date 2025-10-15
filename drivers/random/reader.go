@@ -203,6 +203,12 @@ func (g *randomReadGroup) Perform(now time.Time, logger zerolog.Logger) int {
 		}
 	}
 	duration := time.Since(start)
+	if duration == 0 {
+		// Ensure the reported duration is non-zero even if the work completed
+		// within the clock's resolution to avoid downstream status checks
+		// seeing a zero-length execution window.
+		duration = time.Nanosecond
+	}
 	g.mu.Lock()
 	if g.interval > 0 {
 		g.nextRun = now.Add(g.interval)
