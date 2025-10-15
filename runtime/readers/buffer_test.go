@@ -273,6 +273,154 @@ func TestSignalBufferMultipleAggregations(t *testing.T) {
 	}
 }
 
+func TestSignalBufferQueueLengthReportsTimestampAndQuality(t *testing.T) {
+	buffer, err := NewSignalBuffer("signal", 5)
+	if err != nil {
+		t.Fatalf("new signal buffer: %v", err)
+	}
+	registerAggregation(t, buffer, "queue", AggregationQueueLength)
+
+	base := time.Now()
+	quality := 0.75
+	for i := 0; i < 3; i++ {
+		ts := base.Add(time.Duration(i) * time.Millisecond)
+		var q *float64
+		if i == 2 {
+			q = &quality
+		}
+		if err := buffer.Push(ts, float64(i+1), q); err != nil {
+			t.Fatalf("push %d: %v", i, err)
+		}
+	}
+
+	res, err := buffer.Flush()
+	if err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	if res.Buffered != 3 {
+		t.Fatalf("expected buffered count 3, got %d", res.Buffered)
+	}
+
+	agg := mustAggregation(t, res, "queue")
+	if !agg.HasValue {
+		t.Fatalf("expected aggregation to have value")
+	}
+	if agg.Aggregate.Count != 3 {
+		t.Fatalf("expected aggregate count 3, got %d", agg.Aggregate.Count)
+	}
+	if agg.Aggregate.Overflow {
+		t.Fatalf("did not expect overflow flag")
+	}
+	if got, ok := agg.Aggregate.Value.(int); !ok || got != 3 {
+		t.Fatalf("expected queue length 3, got %v", agg.Aggregate.Value)
+	}
+	expectedTS := base.Add(2 * time.Millisecond)
+	if !agg.Aggregate.Timestamp.Equal(expectedTS) {
+		t.Fatalf("expected timestamp %v, got %v", expectedTS, agg.Aggregate.Timestamp)
+	}
+	if agg.Aggregate.Quality == nil {
+		t.Fatalf("expected quality to be set")
+	}
+	if agg.Aggregate.Quality == &quality {
+		t.Fatalf("expected quality pointer to be cloned, but pointers match")
+	}
+	if got := *agg.Aggregate.Quality; got != quality {
+		t.Fatalf("expected quality %.2f, got %.2f", quality, got)
+	}
+}
+
+func TestSignalBufferQueueLengthOverflow(t *testing.T) {
+	buffer, err := NewSignalBuffer("signal", 3)
+	if err != nil {
+		t.Fatalf("new signal buffer: %v", err)
+	}
+	registerAggregation(t, buffer, "queue", AggregationQueueLength)
+
+	base := time.Now()
+	overflowErrors := 0
+	for i := 0; i < 5; i++ {
+		ts := base.Add(time.Duration(i) * time.Millisecond)
+		if err := buffer.Push(ts, float64(i+1), nil); err != nil {
+			if !errors.Is(err, ErrSignalBufferOverflow) {
+				t.Fatalf("unexpected push error: %v", err)
+			}
+			overflowErrors++
+		}
+	}
+
+	if overflowErrors != 2 {
+		t.Fatalf("expected 2 overflow errors, got %d", overflowErrors)
+	}
+
+	res, err := buffer.Flush()
+	if err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	if !res.Overflow {
+		t.Fatalf("expected flush to report overflow")
+	}
+	if res.Buffered != 3 {
+		t.Fatalf("expected buffered count 3 after overflow, got %d", res.Buffered)
+	}
+	if res.Dropped != 2 {
+		t.Fatalf("expected dropped count 2, got %d", res.Dropped)
+	}
+
+	agg := mustAggregation(t, res, "queue")
+	if !agg.HasValue {
+		t.Fatalf("expected aggregation to have value")
+	}
+	if !agg.Aggregate.Overflow {
+		t.Fatalf("expected aggregate overflow flag")
+	}
+	if agg.Aggregate.Count != 3 {
+		t.Fatalf("expected aggregate count 3, got %d", agg.Aggregate.Count)
+	}
+	if got, ok := agg.Aggregate.Value.(int); !ok || got != 3 {
+		t.Fatalf("expected queue length 3, got %v", agg.Aggregate.Value)
+	}
+	expectedTS := base.Add(4 * time.Millisecond)
+	if !agg.Aggregate.Timestamp.Equal(expectedTS) {
+		t.Fatalf("expected timestamp %v, got %v", expectedTS, agg.Aggregate.Timestamp)
+	}
+}
+
+func TestSignalBufferQueueLengthEmptyFlush(t *testing.T) {
+	buffer, err := NewSignalBuffer("signal", 2)
+	if err != nil {
+		t.Fatalf("new signal buffer: %v", err)
+	}
+	registerAggregation(t, buffer, "queue", AggregationQueueLength)
+
+	res, err := buffer.Flush()
+	if err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	if res.Buffered != 0 {
+		t.Fatalf("expected buffered count 0, got %d", res.Buffered)
+	}
+	if res.Overflow {
+		t.Fatalf("did not expect overflow flag")
+	}
+	if res.Dropped != 0 {
+		t.Fatalf("expected dropped count 0, got %d", res.Dropped)
+	}
+
+	agg := mustAggregation(t, res, "queue")
+	if agg.HasValue {
+		t.Fatalf("did not expect aggregation to have value on empty flush")
+	}
+	if agg.Aggregate.Count != 0 {
+		t.Fatalf("expected aggregate count 0, got %d", agg.Aggregate.Count)
+	}
+	if agg.Aggregate.Overflow {
+		t.Fatalf("did not expect aggregate overflow flag")
+	}
+}
+
 func TestSignalBufferAggregationErrorDoesNotAffectOthers(t *testing.T) {
 	buffer, err := NewSignalBuffer("signal", 2)
 	if err != nil {
