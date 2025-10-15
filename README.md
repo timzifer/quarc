@@ -105,7 +105,9 @@ config: {
         loki: {
             enabled: false
             url: ""
-            labels: {}
+            labels: {
+                app: "plant.core" // overrides the default {app: "quarc"}
+            }
         }
     }
     telemetry: {

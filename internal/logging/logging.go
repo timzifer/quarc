@@ -66,7 +66,7 @@ func newLokiWriter(cfg config.LokiConfig) (io.Writer, func(), error) {
 		labels[model.LabelName(k)] = model.LabelValue(v)
 	}
 	if len(labels) == 0 {
-		labels["app"] = "modbus-processor"
+		labels["app"] = "quarc"
 	}
 
 	writer := &lokiWriter{client: client, labels: labels}
