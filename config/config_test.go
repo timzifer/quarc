@@ -655,3 +655,61 @@ config: {
 		t.Fatal("expected load to fail due to non-positive buffer capacity")
 	}
 }
+
+func TestLoadLiveViewHeatmapConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.cue")
+
+	content := fmt.Sprintf(`package plant
+
+config: {
+    package: "plant.core"
+    cycle: "1s"
+%s
+    live_view: {
+        heatmap: {
+            cooldown: {
+                cells: 9
+                logic: 7
+                programs: 5
+            }
+            colors: {
+                read: "#00ff00"
+                write: "#ff0000"
+                stale: "#999999"
+                logic: "#0000ff"
+                program: "#ff00ff"
+                background: "#111111"
+                border: "#222222"
+            }
+        }
+    }
+    cells: []
+    reads: []
+    writes: []
+}
+`, baseSections)
+
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	heatmap := cfg.LiveView.Heatmap
+	if heatmap.Cooldown.Cells != 9 || heatmap.Cooldown.Logic != 7 || heatmap.Cooldown.Programs != 5 {
+		t.Fatalf("unexpected cooldown config: %#v", heatmap.Cooldown)
+	}
+	if heatmap.Colors.Read != "#00ff00" || heatmap.Colors.Write != "#ff0000" || heatmap.Colors.Stale != "#999999" {
+		t.Fatalf("unexpected heatmap colours: %#v", heatmap.Colors)
+	}
+	if heatmap.Colors.Logic != "#0000ff" || heatmap.Colors.Program != "#ff00ff" {
+		t.Fatalf("unexpected logic/program colours: %#v", heatmap.Colors)
+	}
+	if heatmap.Colors.Background != "#111111" || heatmap.Colors.Border != "#222222" {
+		t.Fatalf("unexpected frame colours: %#v", heatmap.Colors)
+	}
+}
