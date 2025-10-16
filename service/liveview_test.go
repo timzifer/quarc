@@ -66,7 +66,7 @@ func newLiveViewTestServer(t *testing.T) (*Service, *liveViewReadGroupStub, *liv
 	ctrl.SetMode(controlModePause)
 
 	readStub := &liveViewReadGroupStub{status: readers.ReadGroupStatus{
-		ID:           "read-1",
+		ID:           "telemetry:read-1",
 		Function:     "holding_registers",
 		Start:        1,
 		Length:       2,
@@ -74,22 +74,24 @@ func newLiveViewTestServer(t *testing.T) (*Service, *liveViewReadGroupStub, *liv
 		NextRun:      time.Now().Add(100 * time.Millisecond),
 		LastRun:      time.Now(),
 		LastDuration: 5 * time.Millisecond,
+		Source:       config.ModuleReference{Package: "telemetry"},
 	}}
 
 	writeStub := &liveViewWriterStub{status: writers.WriteTargetStatus{
-		ID:           "write-1",
-		Cell:         "temp",
+		ID:           "io:write-1",
+		Cell:         "demo:temp",
 		Function:     "holding_registers",
 		Address:      8,
 		Disabled:     false,
 		LastAttempt:  time.Now().Add(-2 * time.Second),
 		LastWrite:    time.Now().Add(-1 * time.Second),
 		LastDuration: 3 * time.Millisecond,
+		Source:       config.ModuleReference{Package: "io"},
 	}}
 
 	store := &cellStore{cells: map[string]*cell{
-		"temp": {
-			cfg:   config.CellConfig{ID: "temp", Type: config.ValueKindFloat, Name: "Temperature"},
+		"demo:temp": {
+			cfg:   config.CellConfig{ID: "demo:temp", Type: config.ValueKindFloat, Name: "Temperature", Source: config.ModuleReference{Package: "demo"}},
 			value: 21.5,
 			valid: true,
 		},
@@ -102,7 +104,7 @@ func newLiveViewTestServer(t *testing.T) (*Service, *liveViewReadGroupStub, *liv
 		writes:       []writers.Writer{writeStub},
 		metrics:      metrics{CycleCount: 4, LastDuration: 12 * time.Millisecond},
 		load:         newSystemLoad(newWorkerSlots(config.WorkerSlots{Read: 1, Program: 1, Execute: 1, Write: 1})),
-		bufferGroups: map[string][]string{"read-1": {"temp"}},
+		bufferGroups: map[string][]string{"telemetry:read-1": {"demo:temp"}},
 	}
 	svc.load.read.active.Store(1)
 	svc.load.write.active.Store(1)
@@ -136,19 +138,25 @@ func TestLiveViewStateEndpoint(t *testing.T) {
 
 	var payload struct {
 		Cells []struct {
-			ID    string `json:"id"`
-			Kind  string `json:"kind"`
-			Valid bool   `json:"valid"`
+			ID      string `json:"id"`
+			Package string `json:"package"`
+			LocalID string `json:"local_id"`
+			Kind    string `json:"kind"`
+			Valid   bool   `json:"valid"`
 		} `json:"cells"`
 		Control struct {
 			Mode string `json:"mode"`
 		} `json:"control"`
 		Reads []struct {
 			ID       string `json:"id"`
+			Package  string `json:"package"`
+			LocalID  string `json:"local_id"`
 			Disabled bool   `json:"disabled"`
 		} `json:"reads"`
 		Writes []struct {
 			ID       string `json:"id"`
+			Package  string `json:"package"`
+			LocalID  string `json:"local_id"`
 			Disabled bool   `json:"disabled"`
 		} `json:"writes"`
 	}
@@ -159,17 +167,35 @@ func TestLiveViewStateEndpoint(t *testing.T) {
 	if len(payload.Cells) == 0 {
 		t.Fatal("expected at least one cell in payload")
 	}
-	if payload.Cells[0].ID != "temp" {
-		t.Fatalf("expected cell id 'temp', got %s", payload.Cells[0].ID)
+	if payload.Cells[0].ID != "demo:temp" {
+		t.Fatalf("expected cell id 'demo:temp', got %s", payload.Cells[0].ID)
+	}
+	if payload.Cells[0].Package != "demo" {
+		t.Fatalf("expected cell package 'demo', got %s", payload.Cells[0].Package)
+	}
+	if payload.Cells[0].LocalID != "temp" {
+		t.Fatalf("expected cell local_id 'temp', got %s", payload.Cells[0].LocalID)
 	}
 	if payload.Control.Mode != string(controlModePause) {
 		t.Fatalf("expected control mode pause, got %s", payload.Control.Mode)
 	}
-	if len(payload.Reads) != 1 || payload.Reads[0].ID != "read-1" {
-		t.Fatalf("expected read snapshot for read-1, got %+v", payload.Reads)
+	if len(payload.Reads) != 1 || payload.Reads[0].ID != "telemetry:read-1" {
+		t.Fatalf("expected read snapshot for telemetry:read-1, got %+v", payload.Reads)
 	}
-	if len(payload.Writes) != 1 || payload.Writes[0].ID != "write-1" {
-		t.Fatalf("expected write snapshot for write-1, got %+v", payload.Writes)
+	if payload.Reads[0].Package != "telemetry" {
+		t.Fatalf("expected read package 'telemetry', got %s", payload.Reads[0].Package)
+	}
+	if payload.Reads[0].LocalID != "read-1" {
+		t.Fatalf("expected read local_id 'read-1', got %s", payload.Reads[0].LocalID)
+	}
+	if len(payload.Writes) != 1 || payload.Writes[0].ID != "io:write-1" {
+		t.Fatalf("expected write snapshot for io:write-1, got %+v", payload.Writes)
+	}
+	if payload.Writes[0].Package != "io" {
+		t.Fatalf("expected write package 'io', got %s", payload.Writes[0].Package)
+	}
+	if payload.Writes[0].LocalID != "write-1" {
+		t.Fatalf("expected write local_id 'write-1', got %s", payload.Writes[0].LocalID)
 	}
 }
 
@@ -177,7 +203,7 @@ func TestLiveViewCellUpdate(t *testing.T) {
 	svc, _, _, ts := newLiveViewTestServer(t)
 
 	body := bytes.NewBufferString(`{"value": 42, "valid": true}`)
-	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/cells/temp", body)
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/cells/demo:temp", body)
 	if err != nil {
 		t.Fatalf("create request: %v", err)
 	}
@@ -202,14 +228,14 @@ func TestLiveViewCellUpdate(t *testing.T) {
 		t.Fatalf("decode cell response: %v", err)
 	}
 
-	if cellResp.ID != "temp" {
-		t.Fatalf("expected temp cell, got %s", cellResp.ID)
+	if cellResp.ID != "demo:temp" {
+		t.Fatalf("expected demo:temp cell, got %s", cellResp.ID)
 	}
 	if !cellResp.Valid {
 		t.Fatal("expected cell to remain valid")
 	}
 
-	state, err := svc.cells.state("temp")
+	state, err := svc.cells.state("demo:temp")
 	if err != nil {
 		t.Fatalf("fetch updated state: %v", err)
 	}
@@ -243,7 +269,7 @@ func TestLiveViewReadToggle(t *testing.T) {
 	_, readStub, _, ts := newLiveViewTestServer(t)
 
 	body := bytes.NewBufferString(`{"disabled": true}`)
-	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/reads/read-1", body)
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/reads/telemetry:read-1", body)
 	if err != nil {
 		t.Fatalf("create request: %v", err)
 	}
@@ -300,7 +326,7 @@ func TestLiveViewWriteToggle(t *testing.T) {
 	_, _, writeStub, ts := newLiveViewTestServer(t)
 
 	body := bytes.NewBufferString(`{"disabled": true}`)
-	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/writes/write-1", body)
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/writes/io:write-1", body)
 	if err != nil {
 		t.Fatalf("create request: %v", err)
 	}
