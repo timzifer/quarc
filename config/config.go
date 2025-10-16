@@ -462,6 +462,7 @@ func decodeInstance(path string, inst *cue.Instance) (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
+	captureDeclaredSourcePackages(configVal, &cfg)
 	normalizeSignalBuffers(&cfg)
 
 	moduleNamespace := strings.TrimSpace(pkgPrefix)
@@ -1021,6 +1022,79 @@ func mergeInitialSource(child, meta ModuleReference) ModuleReference {
 		child.Package = meta.Package
 	}
 	return child
+}
+
+func captureDeclaredSourcePackages(configVal cue.Value, cfg *Config) {
+	if cfg == nil {
+		return
+	}
+
+	if pkg := extractPackageFromValue(configVal); pkg != "" {
+		cfg.Source.Package = pkg
+	}
+
+	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("connections"))), len(cfg.Connections), func(i int, pkg string) {
+		cfg.Connections[i].Source.Package = pkg
+	})
+	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("cells"))), len(cfg.Cells), func(i int, pkg string) {
+		cfg.Cells[i].Source.Package = pkg
+	})
+	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("programs"))), len(cfg.Programs), func(i int, pkg string) {
+		cfg.Programs[i].Source.Package = pkg
+	})
+	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("reads"))), len(cfg.Reads), func(i int, pkg string) {
+		cfg.Reads[i].Source.Package = pkg
+	})
+	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("writes"))), len(cfg.Writes), func(i int, pkg string) {
+		cfg.Writes[i].Source.Package = pkg
+	})
+	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("logic"))), len(cfg.Logic), func(i int, pkg string) {
+		cfg.Logic[i].Source.Package = pkg
+	})
+}
+
+func captureListPackages(list cue.Value, count int, assign func(int, string)) {
+	if assign == nil || count == 0 || !list.Exists() {
+		return
+	}
+	iter, err := list.List()
+	if err != nil {
+		return
+	}
+	idx := 0
+	for ; iter.Next() && idx < count; idx++ {
+		pkg := extractPackageFromValue(iter.Value())
+		if pkg == "" {
+			continue
+		}
+		assign(idx, pkg)
+	}
+}
+
+func extractPackageFromValue(val cue.Value) string {
+	if !val.Exists() {
+		return ""
+	}
+	for _, path := range []cue.Path{
+		cue.MakePath(cue.Str("source"), cue.Str("package")),
+		cue.MakePath(cue.Str("package")),
+	} {
+		if pkg := readString(val.LookupPath(path)); pkg != "" {
+			return pkg
+		}
+	}
+	return ""
+}
+
+func readString(val cue.Value) string {
+	if !val.Exists() {
+		return ""
+	}
+	str, err := val.String()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(str)
 }
 
 func firstNonEmpty(values ...string) string {
