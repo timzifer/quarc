@@ -6,6 +6,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/timzifer/quarc/config"
+	"github.com/timzifer/quarc/runtime/connections"
 	"github.com/timzifer/quarc/runtime/state"
 )
 
@@ -36,7 +37,8 @@ type WriteTargetStatus struct {
 }
 
 type WriterDependencies struct {
-	Cells state.CellStore
+	Cells       state.CellStore
+	Connections connections.Provider
 }
 
 // WriterFactory constructs a Writer using the provided configuration and

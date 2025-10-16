@@ -15,6 +15,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/timzifer/quarc/config"
+	"github.com/timzifer/quarc/runtime/connections"
 	"github.com/timzifer/quarc/runtime/readers"
 	"github.com/timzifer/quarc/runtime/state"
 	"github.com/timzifer/quarc/runtime/writers"
@@ -83,14 +84,25 @@ func stubOptions(factory testClientFactory) []Option {
 	return []Option{
 		WithReaderFactory(testDriverName, newStubReaderFactory(factory)),
 		WithWriterFactory(testDriverName, newStubWriterFactory(factory)),
+		WithConnectionFactory(testDriverName, newStubConnectionFactory(factory)),
+	}
+}
+
+func newStubConnectionFactory(factory testClientFactory) connections.Factory {
+	return func(cfg config.IOConnectionConfig) (connections.Handle, error) {
+		if factory == nil {
+			return nil, fmt.Errorf("connection %s: no client factory provided", cfg.ID)
+		}
+		client, err := factory(cfg.Endpoint)
+		if err != nil {
+			return nil, err
+		}
+		return client, nil
 	}
 }
 
 func newStubReaderFactory(factory testClientFactory) readers.ReaderFactory {
 	return func(cfg config.ReadGroupConfig, deps readers.ReaderDependencies) (readers.ReadGroup, error) {
-		if factory == nil {
-			return nil, fmt.Errorf("read group %s: no client factory provided", cfg.ID)
-		}
 		if len(cfg.Signals) == 0 {
 			return nil, fmt.Errorf("read group %s: no signals configured", cfg.ID)
 		}
@@ -109,29 +121,51 @@ func newStubReaderFactory(factory testClientFactory) readers.ReaderFactory {
 		if err != nil {
 			return nil, err
 		}
-		client, err := factory(cfg.Endpoint)
-		if err != nil {
-			return nil, err
+		var (
+			client     testClient
+			ownsClient = true
+		)
+		if cfg.Connection != "" {
+			if deps.Connections == nil {
+				return nil, fmt.Errorf("read group %s: connection provider missing", cfg.ID)
+			}
+			handle, err := deps.Connections.Connection(cfg.Connection)
+			if err != nil {
+				return nil, err
+			}
+			var ok bool
+			client, ok = handle.(testClient)
+			if !ok {
+				return nil, fmt.Errorf("read group %s: connection %s has incompatible handle", cfg.ID, cfg.Connection)
+			}
+			ownsClient = false
+		} else {
+			if factory == nil {
+				return nil, fmt.Errorf("read group %s: no client factory provided", cfg.ID)
+			}
+			var err error
+			client, err = factory(cfg.Endpoint)
+			if err != nil {
+				return nil, err
+			}
 		}
 		return &stubReadGroup{
-			id:       cfg.ID,
-			client:   client,
-			cell:     cell,
-			buffer:   buffer,
-			cellID:   cellID,
-			function: cfg.Function,
-			start:    cfg.Start,
-			length:   cfg.Length,
-			source:   cfg.Source,
+			id:         cfg.ID,
+			client:     client,
+			ownsClient: ownsClient,
+			cell:       cell,
+			buffer:     buffer,
+			cellID:     cellID,
+			function:   cfg.Function,
+			start:      cfg.Start,
+			length:     cfg.Length,
+			source:     cfg.Source,
 		}, nil
 	}
 }
 
 func newStubWriterFactory(factory testClientFactory) writers.WriterFactory {
 	return func(cfg config.WriteTargetConfig, deps writers.WriterDependencies) (writers.Writer, error) {
-		if factory == nil {
-			return nil, fmt.Errorf("write target %s: no client factory provided", cfg.ID)
-		}
 		if cfg.Cell == "" {
 			return nil, fmt.Errorf("write target %s: missing cell", cfg.ID)
 		}
@@ -139,31 +173,57 @@ func newStubWriterFactory(factory testClientFactory) writers.WriterFactory {
 		if err != nil {
 			return nil, err
 		}
-		client, err := factory(cfg.Endpoint)
-		if err != nil {
-			return nil, err
+		var (
+			client     testClient
+			ownsClient = true
+		)
+		if cfg.Connection != "" {
+			if deps.Connections == nil {
+				return nil, fmt.Errorf("write target %s: connection provider missing", cfg.ID)
+			}
+			handle, err := deps.Connections.Connection(cfg.Connection)
+			if err != nil {
+				return nil, err
+			}
+			var ok bool
+			client, ok = handle.(testClient)
+			if !ok {
+				return nil, fmt.Errorf("write target %s: connection %s has incompatible handle", cfg.ID, cfg.Connection)
+			}
+			ownsClient = false
+		} else {
+			if factory == nil {
+				return nil, fmt.Errorf("write target %s: no client factory provided", cfg.ID)
+			}
+			var err error
+			client, err = factory(cfg.Endpoint)
+			if err != nil {
+				return nil, err
+			}
 		}
 		return &stubWriter{
-			id:      cfg.ID,
-			client:  client,
-			cell:    cell,
-			cellID:  cfg.Cell,
-			address: cfg.Address,
-			source:  cfg.Source,
+			id:         cfg.ID,
+			client:     client,
+			ownsClient: ownsClient,
+			cell:       cell,
+			cellID:     cfg.Cell,
+			address:    cfg.Address,
+			source:     cfg.Source,
 		}, nil
 	}
 }
 
 type stubReadGroup struct {
-	id       string
-	client   testClient
-	cell     state.Cell
-	buffer   *readers.SignalBuffer
-	cellID   string
-	function string
-	start    uint16
-	length   uint16
-	source   config.ModuleReference
+	id         string
+	client     testClient
+	ownsClient bool
+	cell       state.Cell
+	buffer     *readers.SignalBuffer
+	cellID     string
+	function   string
+	start      uint16
+	length     uint16
+	source     config.ModuleReference
 
 	disabled     atomic.Bool
 	lastRun      time.Time
@@ -228,16 +288,19 @@ func (g *stubReadGroup) Status() readers.ReadGroupStatus {
 }
 
 func (g *stubReadGroup) Close() {
-	_ = g.client.Close()
+	if g.ownsClient {
+		_ = g.client.Close()
+	}
 }
 
 type stubWriter struct {
-	id      string
-	client  testClient
-	cell    state.Cell
-	cellID  string
-	address uint16
-	source  config.ModuleReference
+	id         string
+	client     testClient
+	ownsClient bool
+	cell       state.Cell
+	cellID     string
+	address    uint16
+	source     config.ModuleReference
 
 	disabled  atomic.Bool
 	lastValue bool
@@ -290,7 +353,9 @@ func (w *stubWriter) Status() writers.WriteTargetStatus {
 }
 
 func (w *stubWriter) Close() {
-	_ = w.client.Close()
+	if w.ownsClient {
+		_ = w.client.Close()
+	}
 }
 
 type bufferDropRecord struct {
@@ -1251,5 +1316,80 @@ func TestServiceStateResponseContainsSplitIdentifiers(t *testing.T) {
 	}
 	if payload.Writes[0].Package == "" || payload.Writes[0].LocalID == "" {
 		t.Fatalf("expected split identifiers for writes, got %+v", payload.Writes[0])
+	}
+}
+
+func TestServiceSharedConnections(t *testing.T) {
+	cfg := &config.Config{
+		Cycle: config.Duration{Duration: time.Millisecond},
+		Connections: []config.IOConnectionConfig{{
+			ID:     "stub_bus",
+			Driver: testDriverName,
+			Endpoint: config.EndpointConfig{
+				Address: "ignored:1",
+				Driver:  testDriverName,
+			},
+		}},
+		Cells: []config.CellConfig{
+			{ID: "input", Type: config.ValueKindNumber},
+			{ID: "output", Type: config.ValueKindBool},
+		},
+		Reads: []config.ReadGroupConfig{{
+			ID:         "rg",
+			Connection: "stub_bus",
+			Endpoint:   config.EndpointConfig{Driver: testDriverName},
+			Function:   "holding",
+			Start:      0,
+			Length:     1,
+			Signals: []config.ReadSignalConfig{{
+				Cell:   "input",
+				Offset: 0,
+				Type:   config.ValueKindNumber,
+			}},
+		}},
+		Writes: []config.WriteTargetConfig{{
+			ID:         "wt",
+			Cell:       "output",
+			Connection: "stub_bus",
+			Endpoint:   config.EndpointConfig{Driver: testDriverName},
+			Function:   "coil",
+			Address:    0,
+		}},
+	}
+
+	client := &countingClient{}
+	client.readHoldingFn = func(address, quantity uint16) ([]byte, error) {
+		return []byte{0x00, 0x01}, nil
+	}
+	client.writeCoilFn = func(address, value uint16) ([]byte, error) {
+		return nil, nil
+	}
+
+	var created int
+	factory := func(config.EndpointConfig) (testClient, error) {
+		created++
+		return client, nil
+	}
+
+	logger := zerolog.New(io.Discard)
+	svc, err := New(cfg, logger, stubOptions(factory)...)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	if created != 1 {
+		t.Fatalf("expected one shared connection, got %d", created)
+	}
+
+	if err := svc.IterateOnce(context.Background(), time.Now()); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+
+	if err := svc.Close(); err != nil {
+		t.Fatalf("close service: %v", err)
+	}
+
+	if client.closed != 1 {
+		t.Fatalf("expected shared connection to be closed once, got %d", client.closed)
 	}
 }

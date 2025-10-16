@@ -11,9 +11,10 @@ Key sections mirror the runtime layout:
 * `cycle` – Global cycle duration.
 * `programs` – Reusable control modules with typed input/output bindings executed between the read and logic phases.
 * `cells` – Definitions of all local memory cells.
-* `reads` – Block reads referencing a `driver` through their endpoint. Drivers ingest protocol-specific payloads (Modbus, CAN, OPC-UA, mock data, …) and translate them into cell updates.
+* `connections` – Reusable IO connection definitions describing shared transports (driver, endpoint, optional pooling hints and `driver_settings`). Reads and writes reference these by identifier via their `connection` field.
+* `reads` – Block reads that reference a driver either directly via their `endpoint.driver` or by binding to a shared `connection`. Drivers ingest protocol-specific payloads (Modbus, CAN, OPC-UA, mock data, …) and translate them into cell updates. Inline endpoint blocks may override connection defaults (e.g. timeouts).
 * `logic` – Logic blocks with an expression AST, optional `valid`/`quality` expressions, and a target cell. Dependencies are derived automatically from the expressions.
-* `writes` – Write targets referencing a driver identifier. Driver-specific `driver_settings` values are forwarded untouched so transports can expose their own tuning knobs.
+* `writes` – Write targets referencing a driver identifier, either inline or through a shared `connection`. Driver-specific `driver_settings` values are forwarded untouched so transports can expose their own tuning knobs.
 * `logging` / `policies` – Runtime logging setup and optional global policies (retry behaviour, watchdog, readback, etc.). `logging.format` controls the stdout renderer (`json` by default, `text` for human-friendly console output).
 * `telemetry` – Enables metrics exporters such as Prometheus.
 * `live_view` – Configures the optional live view web UI and heatmap.
@@ -39,6 +40,16 @@ config: {
     telemetry: {
         enabled: false
     }
+    connections: [
+        {
+            id: "io_bus"
+            driver: "modbus"
+            endpoint: {
+                address: "192.168.10.10:502"
+                unit_id: 1
+            }
+        },
+    ]
     cells: [
         {
             id: "temperature"
@@ -48,9 +59,9 @@ config: {
     reads: [
         {
             id: "temperature_sensor"
+            connection: "io_bus"
             endpoint: {
-                address: "192.168.10.10:502"
-                unit_id: 1
+                timeout: "1s"
             }
             function: "holding"
             start: 0

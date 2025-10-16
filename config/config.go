@@ -93,6 +93,23 @@ type EndpointConfig struct {
 	Driver  string   `json:"driver,omitempty"`
 }
 
+// ConnectionPoolingHints exposes optional pooling parameters for reusable connections.
+type ConnectionPoolingHints struct {
+	MaxIdle     int      `json:"max_idle,omitempty"`
+	MaxActive   int      `json:"max_active,omitempty"`
+	MaxLifetime Duration `json:"max_lifetime,omitempty"`
+}
+
+// IOConnectionConfig describes a reusable transport connection shared between reads and writes.
+type IOConnectionConfig struct {
+	ID             string                 `json:"id"`
+	Driver         string                 `json:"driver,omitempty"`
+	Endpoint       EndpointConfig         `json:"endpoint"`
+	DriverSettings json.RawMessage        `json:"driver_settings,omitempty"`
+	Pooling        ConnectionPoolingHints `json:"pooling,omitempty"`
+	Source         ModuleReference        `json:"-"`
+}
+
 // ModuleReference captures metadata about the configuration source that defined an entry.
 type ModuleReference struct {
 	File        string `json:"file,omitempty"`
@@ -148,6 +165,7 @@ type ReadSignalAggregationConfig struct {
 // ReadGroupConfig describes a block read.
 type ReadGroupConfig struct {
 	ID             string              `json:"id"`
+	Connection     string              `json:"connection,omitempty"`
 	Endpoint       EndpointConfig      `json:"endpoint"`
 	Function       string              `json:"function"`
 	Start          uint16              `json:"start"`
@@ -192,6 +210,7 @@ type CANSignalBindingConfig struct {
 type WriteTargetConfig struct {
 	ID             string          `json:"id"`
 	Cell           string          `json:"cell"`
+	Connection     string          `json:"connection,omitempty"`
 	Endpoint       EndpointConfig  `json:"endpoint"`
 	Function       string          `json:"function"`
 	Address        uint16          `json:"address"`
@@ -356,6 +375,7 @@ type Config struct {
 	Telemetry   TelemetryConfig        `json:"telemetry"`
 	Workers     WorkerSlots            `json:"workers,omitempty"`
 	Programs    []ProgramConfig        `json:"programs,omitempty"`
+	Connections []IOConnectionConfig   `json:"connections,omitempty"`
 	Cells       []CellConfig           `json:"cells"`
 	Reads       []ReadGroupConfig      `json:"reads"`
 	Writes      []WriteTargetConfig    `json:"writes"`
@@ -449,6 +469,9 @@ func decodeInstance(path string, inst *cue.Instance) (*Config, error) {
 		return nil, err
 	}
 	qualifyConfig(&cfg, pkgPrefix)
+	if err := applyConnectionDefaults(&cfg); err != nil {
+		return nil, err
+	}
 	if err := validateConfigIdentifiers(&cfg); err != nil {
 		return nil, err
 	}
@@ -592,6 +615,114 @@ func isAllowedSignalAggregator(value string) bool {
 	return ok
 }
 
+func applyConnectionDefaults(cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+	connections := make(map[string]*IOConnectionConfig, len(cfg.Connections))
+	for i := range cfg.Connections {
+		conn := &cfg.Connections[i]
+		conn.ID = strings.TrimSpace(conn.ID)
+		if conn.ID == "" {
+			return errors.New("connection identifier must not be empty")
+		}
+		if _, exists := connections[conn.ID]; exists {
+			return fmt.Errorf("duplicate connection %s", conn.ID)
+		}
+		conn.Driver = strings.TrimSpace(conn.Driver)
+		conn.Endpoint.Driver = strings.TrimSpace(conn.Endpoint.Driver)
+		conn.Endpoint.Address = strings.TrimSpace(conn.Endpoint.Address)
+		if conn.Driver == "" {
+			conn.Driver = conn.Endpoint.Driver
+		}
+		if conn.Driver == "" {
+			return fmt.Errorf("connection %s: driver must not be empty", conn.ID)
+		}
+		if conn.Endpoint.Driver == "" {
+			conn.Endpoint.Driver = conn.Driver
+		}
+		connections[conn.ID] = conn
+	}
+
+	cloneSettings := func(base json.RawMessage) json.RawMessage {
+		if len(base) == 0 {
+			return nil
+		}
+		cloned := make([]byte, len(base))
+		copy(cloned, base)
+		return cloned
+	}
+
+	mergeEndpoint := func(target *EndpointConfig, base EndpointConfig) {
+		if target == nil {
+			return
+		}
+		merged := base
+		if addr := strings.TrimSpace(target.Address); addr != "" {
+			merged.Address = addr
+		}
+		if target.UnitID != 0 || base.UnitID == 0 {
+			merged.UnitID = target.UnitID
+		}
+		if target.Timeout.Duration != 0 || base.Timeout.Duration == 0 {
+			merged.Timeout = target.Timeout
+		}
+		if drv := strings.TrimSpace(target.Driver); drv != "" {
+			merged.Driver = drv
+		}
+		*target = merged
+	}
+
+	for i := range cfg.Reads {
+		read := &cfg.Reads[i]
+		read.Connection = strings.TrimSpace(read.Connection)
+		read.Endpoint.Driver = strings.TrimSpace(read.Endpoint.Driver)
+		read.Endpoint.Address = strings.TrimSpace(read.Endpoint.Address)
+		if read.Connection == "" {
+			continue
+		}
+		conn, ok := connections[read.Connection]
+		if !ok {
+			return fmt.Errorf("read group %s: unknown connection %s", read.ID, read.Connection)
+		}
+		mergeEndpoint(&read.Endpoint, conn.Endpoint)
+		if read.Endpoint.Driver == "" {
+			read.Endpoint.Driver = conn.Driver
+		}
+		if read.Endpoint.Driver != conn.Driver {
+			return fmt.Errorf("read group %s: connection %s uses driver %s but read requests %s", read.ID, read.Connection, conn.Driver, read.Endpoint.Driver)
+		}
+		if len(read.DriverSettings) == 0 && len(conn.DriverSettings) > 0 {
+			read.DriverSettings = cloneSettings(conn.DriverSettings)
+		}
+	}
+
+	for i := range cfg.Writes {
+		write := &cfg.Writes[i]
+		write.Connection = strings.TrimSpace(write.Connection)
+		write.Endpoint.Driver = strings.TrimSpace(write.Endpoint.Driver)
+		write.Endpoint.Address = strings.TrimSpace(write.Endpoint.Address)
+		if write.Connection == "" {
+			continue
+		}
+		conn, ok := connections[write.Connection]
+		if !ok {
+			return fmt.Errorf("write target %s: unknown connection %s", write.ID, write.Connection)
+		}
+		mergeEndpoint(&write.Endpoint, conn.Endpoint)
+		if write.Endpoint.Driver == "" {
+			write.Endpoint.Driver = conn.Driver
+		}
+		if write.Endpoint.Driver != conn.Driver {
+			return fmt.Errorf("write target %s: connection %s uses driver %s but write requests %s", write.ID, write.Connection, conn.Driver, write.Endpoint.Driver)
+		}
+		if len(write.DriverSettings) == 0 && len(conn.DriverSettings) > 0 {
+			write.DriverSettings = cloneSettings(conn.DriverSettings)
+		}
+	}
+	return nil
+}
+
 func qualifyConfig(cfg *Config, pkg string) {
 	pkg = strings.TrimSpace(pkg)
 	if cfg == nil || pkg == "" {
@@ -602,6 +733,9 @@ func qualifyConfig(cfg *Config, pkg string) {
 	}
 	qualifyRef := func(value string) string {
 		return qualifyReference(pkg, value)
+	}
+	for i := range cfg.Connections {
+		cfg.Connections[i].ID = qualifyID(cfg.Connections[i].ID)
 	}
 	for i := range cfg.Cells {
 		cfg.Cells[i].ID = qualifyID(cfg.Cells[i].ID)
@@ -617,6 +751,7 @@ func qualifyConfig(cfg *Config, pkg string) {
 	}
 	for i := range cfg.Reads {
 		cfg.Reads[i].ID = qualifyID(cfg.Reads[i].ID)
+		cfg.Reads[i].Connection = qualifyRef(cfg.Reads[i].Connection)
 		for j := range cfg.Reads[i].Signals {
 			cfg.Reads[i].Signals[j].Cell = qualifyRef(cfg.Reads[i].Signals[j].Cell)
 			for k := range cfg.Reads[i].Signals[j].Aggregations {
@@ -635,6 +770,7 @@ func qualifyConfig(cfg *Config, pkg string) {
 	for i := range cfg.Writes {
 		cfg.Writes[i].ID = qualifyID(cfg.Writes[i].ID)
 		cfg.Writes[i].Cell = qualifyRef(cfg.Writes[i].Cell)
+		cfg.Writes[i].Connection = qualifyRef(cfg.Writes[i].Connection)
 	}
 	for i := range cfg.Logic {
 		cfg.Logic[i].ID = qualifyID(cfg.Logic[i].ID)
@@ -674,6 +810,11 @@ func qualifyReference(pkg, value string) string {
 func validateConfigIdentifiers(cfg *Config) error {
 	if cfg == nil {
 		return nil
+	}
+	for _, conn := range cfg.Connections {
+		if err := ensureIdentifier(conn.ID, "connection"); err != nil {
+			return err
+		}
 	}
 	for _, cell := range cfg.Cells {
 		if err := ensureIdentifier(cell.ID, "cell"); err != nil {
@@ -786,6 +927,9 @@ func (c *Config) setSource(meta ModuleReference) {
 func (c *Config) applySource(meta ModuleReference) {
 	if c == nil {
 		return
+	}
+	for i := range c.Connections {
+		c.Connections[i].Source = mergeInitialSource(c.Connections[i].Source, meta)
 	}
 	for i := range c.Cells {
 		c.Cells[i].Source = mergeInitialSource(c.Cells[i].Source, meta)

@@ -26,6 +26,14 @@ func NewReadFactory() readers.ReaderFactory {
 		if len(cfg.Signals) == 0 {
 			return nil, fmt.Errorf("read group %s: no signals configured", cfg.ID)
 		}
+		if cfg.Connection != "" {
+			if deps.Connections == nil {
+				return nil, fmt.Errorf("read group %s: connections provider missing", cfg.ID)
+			}
+			if _, err := deps.Connections.Connection(cfg.Connection); err != nil {
+				return nil, fmt.Errorf("read group %s: %w", cfg.ID, err)
+			}
+		}
 		if deps.Cells == nil {
 			return nil, fmt.Errorf("read group %s: dependencies missing cell store", cfg.ID)
 		}

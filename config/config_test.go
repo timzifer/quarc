@@ -1,10 +1,12 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const baseSections = `
@@ -711,5 +713,110 @@ config: {
 	}
 	if heatmap.Colors.Background != "#111111" || heatmap.Colors.Border != "#222222" {
 		t.Fatalf("unexpected frame colours: %#v", heatmap.Colors)
+	}
+}
+
+func TestApplyConnectionDefaults(t *testing.T) {
+	sharedSettings := json.RawMessage(`{"shared":true}`)
+	cfg := &Config{
+		Connections: []IOConnectionConfig{{
+			ID:             "plant:shared",
+			Driver:         "stub",
+			Endpoint:       EndpointConfig{Address: "127.0.0.1:502", UnitID: 1, Timeout: Duration{Duration: time.Second}},
+			DriverSettings: sharedSettings,
+		}},
+		Reads: []ReadGroupConfig{
+			{
+				ID:         "plant:read-default",
+				Connection: "plant:shared",
+				Endpoint:   EndpointConfig{},
+			},
+			{
+				ID:         "plant:read-override",
+				Connection: "plant:shared",
+				Endpoint:   EndpointConfig{Address: "192.0.2.10:1502"},
+			},
+			{
+				ID:       "plant:inline",
+				Endpoint: EndpointConfig{Address: "192.0.2.20:1502", Driver: "stub"},
+			},
+		},
+		Writes: []WriteTargetConfig{
+			{
+				ID:         "plant:write-default",
+				Cell:       "plant:cell",
+				Connection: "plant:shared",
+				Endpoint:   EndpointConfig{},
+			},
+			{
+				ID:             "plant:write-custom",
+				Cell:           "plant:cell",
+				Connection:     "plant:shared",
+				Endpoint:       EndpointConfig{},
+				DriverSettings: json.RawMessage(`{"local":true}`),
+			},
+		},
+	}
+
+	if err := applyConnectionDefaults(cfg); err != nil {
+		t.Fatalf("apply connection defaults: %v", err)
+	}
+
+	if cfg.Connections[0].Endpoint.Driver != "stub" {
+		t.Fatalf("expected connection driver to be normalised, got %q", cfg.Connections[0].Endpoint.Driver)
+	}
+
+	if cfg.Reads[0].Endpoint.Address != "127.0.0.1:502" || cfg.Reads[0].Endpoint.Driver != "stub" {
+		t.Fatalf("expected read defaults to apply, got %+v", cfg.Reads[0].Endpoint)
+	}
+	if cfg.Reads[0].Endpoint.Timeout.Duration != time.Second {
+		t.Fatalf("expected read timeout to inherit, got %v", cfg.Reads[0].Endpoint.Timeout.Duration)
+	}
+	if len(cfg.Reads[0].DriverSettings) == 0 {
+		t.Fatalf("expected read driver settings to inherit")
+	}
+	if len(cfg.Reads[0].DriverSettings) > 0 && len(cfg.Connections[0].DriverSettings) > 0 {
+		if &cfg.Reads[0].DriverSettings[0] == &cfg.Connections[0].DriverSettings[0] {
+			t.Fatalf("expected driver settings to be cloned, not shared")
+		}
+	}
+
+	if cfg.Reads[1].Endpoint.Address != "192.0.2.10:1502" {
+		t.Fatalf("expected read override address to be preserved, got %q", cfg.Reads[1].Endpoint.Address)
+	}
+	if cfg.Reads[1].Endpoint.Driver != "stub" {
+		t.Fatalf("expected read override driver to match connection, got %q", cfg.Reads[1].Endpoint.Driver)
+	}
+
+	if cfg.Reads[2].Endpoint.Address != "192.0.2.20:1502" {
+		t.Fatalf("expected inline endpoint to remain unchanged, got %q", cfg.Reads[2].Endpoint.Address)
+	}
+
+	if cfg.Writes[0].Endpoint.Address != "127.0.0.1:502" || cfg.Writes[0].Endpoint.Driver != "stub" {
+		t.Fatalf("expected write defaults to apply, got %+v", cfg.Writes[0].Endpoint)
+	}
+	if len(cfg.Writes[0].DriverSettings) == 0 {
+		t.Fatalf("expected write driver settings to inherit")
+	}
+	if len(cfg.Writes[0].DriverSettings) > 0 && len(cfg.Connections[0].DriverSettings) > 0 {
+		if &cfg.Writes[0].DriverSettings[0] == &cfg.Connections[0].DriverSettings[0] {
+			t.Fatalf("expected write driver settings to be cloned")
+		}
+	}
+	if string(cfg.Writes[1].DriverSettings) != `{"local":true}` {
+		t.Fatalf("expected write-specific driver settings to remain, got %s", string(cfg.Writes[1].DriverSettings))
+	}
+}
+
+func TestApplyConnectionDefaultsUnknownConnection(t *testing.T) {
+	cfg := &Config{
+		Reads: []ReadGroupConfig{{
+			ID:         "plant:missing",
+			Connection: "plant:unknown",
+			Endpoint:   EndpointConfig{Driver: "stub"},
+		}},
+	}
+	if err := applyConnectionDefaults(cfg); err == nil {
+		t.Fatalf("expected error for missing connection")
 	}
 }
