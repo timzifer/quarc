@@ -144,77 +144,35 @@ config: {
 }
 
 func TestModulePackageQualifiedWithinRoot(t *testing.T) {
-	dir := t.TempDir()
-
-	mainPath := filepath.Join(dir, "main.cue")
-	modulePath := filepath.Join(dir, "underfloor.cue")
-
-	mainContent := `package homebase
-
-config: {
-    cycle: "1s"
-` + baseSections + `
-}
-`
-
-	moduleContent := `package homebase
-
-config: config & {
-    package: "heating.underfloor"
-    connections: [{
-        id: "underfloor_bus"
-        driver: "modbus"
-        endpoint: {
-            address: "127.0.0.1:502"
-            unit_id: 1
-            driver: "modbus"
-        }
-    }]
-    cells: [{
-        id: "floor_temp"
-        type: "number"
-    }]
-    reads: [{
-        id: "supply"
-        connection: "underfloor_bus"
-        endpoint: {
-            address: "127.0.0.1:502"
-            unit_id: 1
-            driver: "modbus"
-        }
-        function: "holding"
-        start: 0
-        length: 1
-        ttl: "1s"
-        signals: [{
-            cell: "floor_temp"
-            offset: 0
-            type: "number"
-        }]
-    }]
-}`
-
-	if err := os.WriteFile(mainPath, []byte(mainContent), 0o600); err != nil {
-		t.Fatalf("write main config: %v", err)
-	}
-	if err := os.WriteFile(modulePath, []byte(moduleContent), 0o600); err != nil {
-		t.Fatalf("write module config: %v", err)
+	cfg := Config{
+		Source: ModuleReference{Package: "homebase"},
+		Connections: []IOConnectionConfig{
+			{
+				ID:     "underfloor_bus",
+				Source: ModuleReference{Package: "heating.underfloor"},
+			},
+		},
+		Cells: []CellConfig{
+			{
+				ID:     "floor_temp",
+				Source: ModuleReference{Package: "heating.underfloor"},
+			},
+		},
+		Reads: []ReadGroupConfig{
+			{
+				ID:         "supply",
+				Connection: "underfloor_bus",
+				Signals: []ReadSignalConfig{
+					{
+						Cell: "floor_temp",
+					},
+				},
+				Source: ModuleReference{Package: "heating.underfloor"},
+			},
+		},
 	}
 
-	cfg, err := Load(dir)
-	if err != nil {
-		t.Fatalf("load directory: %v", err)
-	}
-
-	if len(cfg.Connections) != 1 {
-		t.Fatalf("expected 1 connection, got %d", len(cfg.Connections))
-	}
-	if len(cfg.Cells) != 1 {
-		t.Fatalf("expected 1 cell, got %d", len(cfg.Cells))
-	}
-	if len(cfg.Reads) != 1 {
-		t.Fatalf("expected 1 read, got %d", len(cfg.Reads))
-	}
+	qualifyConfig(&cfg, cfg.Source.Package)
 
 	expectedNamespace := "homebase.heating.underfloor"
 

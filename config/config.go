@@ -464,11 +464,8 @@ func decodeInstance(path string, inst *cue.Instance) (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
-	assignments := captureDeclaredSourcePackages(configVal, &cfg)
+	captureDeclaredSourcePackages(configVal, &cfg)
 	normalizeSignalBuffers(&cfg)
-
-	rootPackage := determineRootNamespace(pkgName, explicitPackage, assignments)
-	pkgPrefix := computePackagePrefix(inst, rootPackage)
 
 	moduleNamespace := strings.TrimSpace(pkgPrefix)
 	if moduleNamespace != "" {
@@ -1029,11 +1026,13 @@ func mergeInitialSource(child, meta ModuleReference) ModuleReference {
 	return child
 }
 
-func captureDeclaredSourcePackages(configVal cue.Value, cfg *Config) moduleAssignments {
-	assignments := gatherModuleAssignments(configVal)
-
+func captureDeclaredSourcePackages(configVal cue.Value, cfg *Config) {
 	if cfg == nil {
-		return assignments
+		return
+	}
+
+	if pkg := extractPackageFromValue(configVal); pkg != "" {
+		cfg.Source.Package = pkg
 	}
 
 	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("connections"))), len(cfg.Connections), func(i int, pkg string) {
@@ -1054,9 +1053,6 @@ func captureDeclaredSourcePackages(configVal cue.Value, cfg *Config) moduleAssig
 	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("logic"))), len(cfg.Logic), func(i int, pkg string) {
 		cfg.Logic[i].Source.Package = pkg
 	})
-
-	applyModuleAssignments(cfg, assignments)
-	return assignments
 }
 
 func captureListPackages(list cue.Value, count int, assign func(int, string)) {
@@ -1075,229 +1071,6 @@ func captureListPackages(list cue.Value, count int, assign func(int, string)) {
 		}
 		assign(idx, pkg)
 	}
-}
-
-type moduleAssignments struct {
-	connections map[string]string
-	cells       map[string]string
-	programs    map[string]string
-	reads       map[string]string
-	writes      map[string]string
-	logic       map[string]string
-	packages    map[string]struct{}
-	modules     []modulePackageInfo
-}
-
-func newModuleAssignments() moduleAssignments {
-	return moduleAssignments{
-		connections: make(map[string]string),
-		cells:       make(map[string]string),
-		programs:    make(map[string]string),
-		reads:       make(map[string]string),
-		writes:      make(map[string]string),
-		logic:       make(map[string]string),
-		packages:    make(map[string]struct{}),
-		modules:     make([]modulePackageInfo, 0),
-	}
-}
-
-type modulePackageInfo struct {
-	pkg     string
-	hasRoot bool
-}
-
-func gatherModuleAssignments(val cue.Value) moduleAssignments {
-	assignments := newModuleAssignments()
-	if !val.Exists() {
-		return assignments
-	}
-
-	op, conjuncts := val.Expr()
-	if op != cue.AndOp || len(conjuncts) == 0 {
-		pkg := extractPackageFromValue(val)
-		hasRoot := moduleDefinesRootFields(val)
-		if partial, err := decodeConfigFragment(val); err == nil {
-			assignments.recordPartial(partial, pkg, hasRoot)
-		}
-		return assignments
-	}
-
-	for _, conj := range conjuncts {
-		pkg := extractPackageFromValue(conj)
-		hasRoot := moduleDefinesRootFields(conj)
-		partial, err := decodeConfigFragment(conj)
-		if err != nil {
-			continue
-		}
-		assignments.recordPartial(partial, pkg, hasRoot)
-	}
-
-	return assignments
-}
-
-func decodeConfigFragment(val cue.Value) (*Config, error) {
-	evaluated := val
-	if def, ok := val.Default(); ok {
-		evaluated = def
-	} else {
-		evaluated = val.Eval()
-	}
-	if !evaluated.Exists() {
-		return nil, errors.New("config fragment does not exist")
-	}
-	data, err := evaluated.MarshalJSON()
-	if err != nil {
-		return nil, err
-	}
-	var partial Config
-	if err := json.Unmarshal(data, &partial); err != nil {
-		return nil, err
-	}
-	return &partial, nil
-}
-
-func moduleDefinesRootFields(val cue.Value) bool {
-	if !val.Exists() {
-		return false
-	}
-	node := val.Source()
-	field, ok := node.(*ast.Field)
-	if !ok {
-		return false
-	}
-	switch expr := field.Value.(type) {
-	case *ast.StructLit:
-		return true
-	case *ast.BinaryExpr:
-		if expr.Op == token.AND {
-			return false
-		}
-	}
-	return false
-}
-
-func (m *moduleAssignments) recordPartial(partial *Config, pkg string, hasRoot bool) {
-	if partial == nil {
-		return
-	}
-	trimmedPkg := strings.TrimSpace(pkg)
-	if m.packages != nil && trimmedPkg != "" {
-		m.packages[trimmedPkg] = struct{}{}
-	}
-	m.modules = append(m.modules, modulePackageInfo{pkg: trimmedPkg, hasRoot: hasRoot})
-
-	if trimmedPkg == "" {
-		// still record module info even without package but skip ID assignments
-		return
-	}
-
-	record := func(mapping map[string]string, id string) {
-		key := strings.TrimSpace(id)
-		if key == "" {
-			return
-		}
-		if _, exists := mapping[key]; !exists {
-			mapping[key] = trimmedPkg
-		}
-	}
-
-	for _, conn := range partial.Connections {
-		record(m.connections, conn.ID)
-	}
-	for _, cell := range partial.Cells {
-		record(m.cells, cell.ID)
-	}
-	for _, program := range partial.Programs {
-		record(m.programs, program.ID)
-	}
-	for _, read := range partial.Reads {
-		record(m.reads, read.ID)
-	}
-	for _, write := range partial.Writes {
-		record(m.writes, write.ID)
-	}
-	for _, logic := range partial.Logic {
-		record(m.logic, logic.ID)
-	}
-}
-
-func applyModuleAssignments(cfg *Config, assignments moduleAssignments) {
-	if cfg == nil {
-		return
-	}
-
-	assign := func(ref *ModuleReference, id string, mapping map[string]string) {
-		if ref == nil {
-			return
-		}
-		if strings.TrimSpace(ref.Package) != "" {
-			return
-		}
-		key := strings.TrimSpace(id)
-		if key == "" {
-			return
-		}
-		if pkg, ok := mapping[key]; ok && strings.TrimSpace(pkg) != "" {
-			ref.Package = pkg
-		}
-	}
-
-	for i := range cfg.Connections {
-		assign(&cfg.Connections[i].Source, cfg.Connections[i].ID, assignments.connections)
-	}
-	for i := range cfg.Cells {
-		assign(&cfg.Cells[i].Source, cfg.Cells[i].ID, assignments.cells)
-	}
-	for i := range cfg.Programs {
-		assign(&cfg.Programs[i].Source, cfg.Programs[i].ID, assignments.programs)
-	}
-	for i := range cfg.Reads {
-		assign(&cfg.Reads[i].Source, cfg.Reads[i].ID, assignments.reads)
-	}
-	for i := range cfg.Writes {
-		assign(&cfg.Writes[i].Source, cfg.Writes[i].ID, assignments.writes)
-	}
-	for i := range cfg.Logic {
-		assign(&cfg.Logic[i].Source, cfg.Logic[i].ID, assignments.logic)
-	}
-}
-
-func determineRootNamespace(cuePkg, explicit string, assignments moduleAssignments) string {
-	trimmedExplicit := strings.TrimSpace(explicit)
-	hasRootModule := false
-	if trimmedExplicit != "" {
-		for _, info := range assignments.modules {
-			if info.hasRoot {
-				hasRootModule = true
-				if info.pkg == trimmedExplicit {
-					return trimmedExplicit
-				}
-			}
-		}
-		if !hasRootModule && len(assignments.packages) <= 1 {
-			return trimmedExplicit
-		}
-	}
-
-	for _, info := range assignments.modules {
-		if info.hasRoot {
-			if trimmed := strings.TrimSpace(info.pkg); trimmed != "" {
-				return trimmed
-			}
-		}
-	}
-
-	if trimmedCue := strings.TrimSpace(cuePkg); trimmedCue != "" {
-		return trimmedCue
-	}
-
-	for pkg := range assignments.packages {
-		if trimmed := strings.TrimSpace(pkg); trimmed != "" {
-			return trimmed
-		}
-	}
-
-	return ""
 }
 
 func extractPackageFromValue(val cue.Value) string {
