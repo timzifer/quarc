@@ -143,6 +143,56 @@ config: {
 	}
 }
 
+func TestModulePackageQualifiedWithinRoot(t *testing.T) {
+	cfg := Config{
+		Source: ModuleReference{Package: "homebase"},
+		Connections: []IOConnectionConfig{
+			{
+				ID:     "underfloor_bus",
+				Source: ModuleReference{Package: "heating.underfloor"},
+			},
+		},
+		Cells: []CellConfig{
+			{
+				ID:     "floor_temp",
+				Source: ModuleReference{Package: "heating.underfloor"},
+			},
+		},
+		Reads: []ReadGroupConfig{
+			{
+				ID:         "supply",
+				Connection: "underfloor_bus",
+				Signals: []ReadSignalConfig{
+					{
+						Cell: "floor_temp",
+					},
+				},
+				Source: ModuleReference{Package: "heating.underfloor"},
+			},
+		},
+	}
+
+	qualifyConfig(&cfg, cfg.Source.Package)
+
+	expectedNamespace := "homebase.heating.underfloor"
+
+	if got := cfg.Connections[0].ID; got != expectedNamespace+":underfloor_bus" {
+		t.Fatalf("expected connection id %q, got %q", expectedNamespace+":underfloor_bus", got)
+	}
+	if got := cfg.Cells[0].ID; got != expectedNamespace+":floor_temp" {
+		t.Fatalf("expected cell id %q, got %q", expectedNamespace+":floor_temp", got)
+	}
+	if got := cfg.Reads[0].ID; got != expectedNamespace+":supply" {
+		t.Fatalf("expected read id %q, got %q", expectedNamespace+":supply", got)
+	}
+	if got := cfg.Reads[0].Connection; got != expectedNamespace+":underfloor_bus" {
+		t.Fatalf("expected read connection %q, got %q", expectedNamespace+":underfloor_bus", got)
+	}
+	if got := cfg.Reads[0].Signals[0].Cell; got != expectedNamespace+":floor_temp" {
+		t.Fatalf("expected read signal cell %q, got %q", expectedNamespace+":floor_temp", got)
+	}
+}
+
 func TestQualifiedReferencesRemain(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.cue")
