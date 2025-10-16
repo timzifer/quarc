@@ -85,7 +85,7 @@ Expression ASTs only execute when all declared dependencies exist and are valid.
 
 ## Configuration
 
-Configuration is expressed in [CUE](https://cuelang.org). Each configuration package exports a top-level `config` value matching `config.Config`. The optional `package` field determines the namespace applied to identifiers. Any `id` or cell reference without a dot is automatically qualified with this package path, so short names stay unambiguous. References that already contain a dot are treated as fully qualified names and are left untouched.
+Configuration is expressed in [CUE](https://cuelang.org). Each configuration package exports a top-level `config` value matching `config.Config`. The package namespace is derived from the CUE package path (with directory separators rewritten as dots) and optionally extended by the `config.package` suffix. Any `id` or cell reference without a colon is automatically expanded to `<package path>:<local>` so short names stay unambiguous. References that already contain a colon are treated as fully qualified names and are left untouched.
 
 Key sections mirror the previous layout:
 
@@ -197,9 +197,11 @@ live_view: {
             background: "#f5f5f5"
             border: "#424242"
         }
-    }
+        }
 }
 ```
+
+Short identifiers such as `temperature` become `plant.core:temperature` once loaded. To refer to a cell from another package, use its fully qualified `<package>:<local>` form directly.
 
 Die Farben werden 1:1 in der Oberfläche verwendet: Neu geschriebene Zellen nutzen `write`, kürzlich gelesene `read`, inaktive Kacheln `stale`. Für Logik- und Programmkacheln kommen `logic` bzw. `program` zum Einsatz, während Rahmen- und Hintergrundfarben (`border`, `background`) das UI-Theming bestimmen.
 
@@ -222,7 +224,7 @@ Der Collector registriert folgende Metriken:
 
 Eigene Collector-Implementierungen lassen sich per `processor.WithTelemetry(...)` übergeben; andernfalls fällt der Dienst auf einen No-Op-Collector zurück, wenn `enabled` deaktiviert oder ein unbekannter Provider hinterlegt ist.
 
-Short identifiers such as `temperature` are materialised as `plant.core.temperature` once loaded. To refer to a cell from another package, use its fully qualified name directly.
+Short identifiers such as `temperature` are materialised as `plant.core:temperature` once loaded. To refer to a cell from another package, use its fully qualified `<package>:<local>` name directly.
 
 ### Templates and reuse
 

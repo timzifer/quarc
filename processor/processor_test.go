@@ -106,7 +106,7 @@ config: {
 	if len(proc.config.Cells) != 1 {
 		t.Fatalf("expected 1 cell, got %d", len(proc.config.Cells))
 	}
-	if proc.config.Cells[0].ID != "overlay.test.virtual" {
+	if proc.config.Cells[0].ID != "overlay.test:virtual" {
 		t.Fatalf("unexpected cell id %q", proc.config.Cells[0].ID)
 	}
 }
