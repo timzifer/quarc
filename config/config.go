@@ -11,7 +11,9 @@ import (
 	"unicode"
 
 	"cuelang.org/go/cue"
+	"cuelang.org/go/cue/ast"
 	"cuelang.org/go/cue/load"
+	"cuelang.org/go/cue/token"
 )
 
 // Duration wraps time.Duration to support decoding from configuration files.
@@ -444,16 +446,16 @@ func decodeInstance(path string, inst *cue.Instance) (*Config, error) {
 		configVal = value
 	}
 	pkgName := strings.TrimSpace(inst.PkgName)
+	explicitPackage := ""
 	if pkgField := configVal.LookupPath(cue.MakePath(cue.Str("package"))); pkgField.Exists() {
 		if str, err := pkgField.String(); err == nil {
 			if trimmed := strings.TrimSpace(str); trimmed != "" {
-				pkgName = trimmed
+				explicitPackage = trimmed
 			}
 		} else {
 			return nil, fmt.Errorf("read package name: %w", err)
 		}
 	}
-	pkgPrefix := computePackagePrefix(inst, pkgName)
 	data, err := configVal.MarshalJSON()
 	if err != nil {
 		return nil, fmt.Errorf("encode config to JSON: %w", err)
