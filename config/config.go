@@ -11,7 +11,9 @@ import (
 	"unicode"
 
 	"cuelang.org/go/cue"
+	"cuelang.org/go/cue/ast"
 	"cuelang.org/go/cue/load"
+	"cuelang.org/go/cue/token"
 )
 
 // Duration wraps time.Duration to support decoding from configuration files.
@@ -444,16 +446,16 @@ func decodeInstance(path string, inst *cue.Instance) (*Config, error) {
 		configVal = value
 	}
 	pkgName := strings.TrimSpace(inst.PkgName)
+	explicitPackage := ""
 	if pkgField := configVal.LookupPath(cue.MakePath(cue.Str("package"))); pkgField.Exists() {
 		if str, err := pkgField.String(); err == nil {
 			if trimmed := strings.TrimSpace(str); trimmed != "" {
-				pkgName = trimmed
+				explicitPackage = trimmed
 			}
 		} else {
 			return nil, fmt.Errorf("read package name: %w", err)
 		}
 	}
-	pkgPrefix := computePackagePrefix(inst, pkgName)
 	data, err := configVal.MarshalJSON()
 	if err != nil {
 		return nil, fmt.Errorf("encode config to JSON: %w", err)
@@ -462,7 +464,46 @@ func decodeInstance(path string, inst *cue.Instance) (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
+	assignments := captureDeclaredSourcePackages(configVal, &cfg)
 	normalizeSignalBuffers(&cfg)
+
+	rootPackage := determineRootNamespace(pkgName, explicitPackage, assignments)
+	pkgPrefix := computePackagePrefix(inst, rootPackage)
+
+	moduleNamespace := strings.TrimSpace(pkgPrefix)
+	if moduleNamespace != "" {
+		for i := range cfg.Connections {
+			if strings.TrimSpace(cfg.Connections[i].Source.Package) == "" {
+				cfg.Connections[i].Source.Package = moduleNamespace
+			}
+		}
+		for i := range cfg.Cells {
+			if strings.TrimSpace(cfg.Cells[i].Source.Package) == "" {
+				cfg.Cells[i].Source.Package = moduleNamespace
+			}
+		}
+		for i := range cfg.Programs {
+			if strings.TrimSpace(cfg.Programs[i].Source.Package) == "" {
+				cfg.Programs[i].Source.Package = moduleNamespace
+			}
+		}
+		for i := range cfg.Reads {
+			if strings.TrimSpace(cfg.Reads[i].Source.Package) == "" {
+				cfg.Reads[i].Source.Package = moduleNamespace
+			}
+		}
+		for i := range cfg.Writes {
+			if strings.TrimSpace(cfg.Writes[i].Source.Package) == "" {
+				cfg.Writes[i].Source.Package = moduleNamespace
+			}
+		}
+		for i := range cfg.Logic {
+			if strings.TrimSpace(cfg.Logic[i].Source.Package) == "" {
+				cfg.Logic[i].Source.Package = moduleNamespace
+			}
+		}
+	}
+
 	meta := ModuleReference{File: path, Name: cfg.Name, Description: cfg.Description, Package: pkgPrefix}
 	cfg.setSource(meta)
 	if err := validateSignalBuffers(&cfg); err != nil {
@@ -724,65 +765,89 @@ func applyConnectionDefaults(cfg *Config) error {
 }
 
 func qualifyConfig(cfg *Config, pkg string) {
-	pkg = strings.TrimSpace(pkg)
-	if cfg == nil || pkg == "" {
+	if cfg == nil {
 		return
 	}
-	qualifyID := func(id string) string {
-		return qualifyIdentifier(pkg, id)
+	root := strings.TrimSpace(pkg)
+	qualifyID := func(namespace, id string) string {
+		return qualifyIdentifier(namespace, id)
 	}
-	qualifyRef := func(value string) string {
-		return qualifyReference(pkg, value)
+	qualifyRef := func(namespace, value string) string {
+		return qualifyReference(namespace, value)
 	}
 	for i := range cfg.Connections {
-		cfg.Connections[i].ID = qualifyID(cfg.Connections[i].ID)
+		namespace := combineNamespaces(root, cfg.Connections[i].Source.Package)
+		cfg.Connections[i].ID = qualifyID(namespace, cfg.Connections[i].ID)
 	}
 	for i := range cfg.Cells {
-		cfg.Cells[i].ID = qualifyID(cfg.Cells[i].ID)
+		namespace := combineNamespaces(root, cfg.Cells[i].Source.Package)
+		cfg.Cells[i].ID = qualifyID(namespace, cfg.Cells[i].ID)
 	}
 	for i := range cfg.Programs {
-		cfg.Programs[i].ID = qualifyID(cfg.Programs[i].ID)
+		namespace := combineNamespaces(root, cfg.Programs[i].Source.Package)
+		cfg.Programs[i].ID = qualifyID(namespace, cfg.Programs[i].ID)
 		for j := range cfg.Programs[i].Inputs {
-			cfg.Programs[i].Inputs[j].Cell = qualifyRef(cfg.Programs[i].Inputs[j].Cell)
+			cfg.Programs[i].Inputs[j].Cell = qualifyRef(namespace, cfg.Programs[i].Inputs[j].Cell)
 		}
 		for j := range cfg.Programs[i].Outputs {
-			cfg.Programs[i].Outputs[j].Cell = qualifyRef(cfg.Programs[i].Outputs[j].Cell)
+			cfg.Programs[i].Outputs[j].Cell = qualifyRef(namespace, cfg.Programs[i].Outputs[j].Cell)
 		}
 	}
 	for i := range cfg.Reads {
-		cfg.Reads[i].ID = qualifyID(cfg.Reads[i].ID)
-		cfg.Reads[i].Connection = qualifyRef(cfg.Reads[i].Connection)
+		namespace := combineNamespaces(root, cfg.Reads[i].Source.Package)
+		cfg.Reads[i].ID = qualifyID(namespace, cfg.Reads[i].ID)
+		cfg.Reads[i].Connection = qualifyRef(namespace, cfg.Reads[i].Connection)
 		for j := range cfg.Reads[i].Signals {
-			cfg.Reads[i].Signals[j].Cell = qualifyRef(cfg.Reads[i].Signals[j].Cell)
+			cfg.Reads[i].Signals[j].Cell = qualifyRef(namespace, cfg.Reads[i].Signals[j].Cell)
 			for k := range cfg.Reads[i].Signals[j].Aggregations {
-				cfg.Reads[i].Signals[j].Aggregations[k].Cell = qualifyRef(cfg.Reads[i].Signals[j].Aggregations[k].Cell)
-				cfg.Reads[i].Signals[j].Aggregations[k].Quality = qualifyRef(cfg.Reads[i].Signals[j].Aggregations[k].Quality)
+				cfg.Reads[i].Signals[j].Aggregations[k].Cell = qualifyRef(namespace, cfg.Reads[i].Signals[j].Aggregations[k].Cell)
+				cfg.Reads[i].Signals[j].Aggregations[k].Quality = qualifyRef(namespace, cfg.Reads[i].Signals[j].Aggregations[k].Quality)
 			}
 		}
 		if cfg.Reads[i].CAN != nil {
 			for j := range cfg.Reads[i].CAN.Frames {
 				for k := range cfg.Reads[i].CAN.Frames[j].Signals {
-					cfg.Reads[i].CAN.Frames[j].Signals[k].Cell = qualifyRef(cfg.Reads[i].CAN.Frames[j].Signals[k].Cell)
+					cfg.Reads[i].CAN.Frames[j].Signals[k].Cell = qualifyRef(namespace, cfg.Reads[i].CAN.Frames[j].Signals[k].Cell)
 				}
 			}
 		}
 	}
 	for i := range cfg.Writes {
-		cfg.Writes[i].ID = qualifyID(cfg.Writes[i].ID)
-		cfg.Writes[i].Cell = qualifyRef(cfg.Writes[i].Cell)
-		cfg.Writes[i].Connection = qualifyRef(cfg.Writes[i].Connection)
+		namespace := combineNamespaces(root, cfg.Writes[i].Source.Package)
+		cfg.Writes[i].ID = qualifyID(namespace, cfg.Writes[i].ID)
+		cfg.Writes[i].Cell = qualifyRef(namespace, cfg.Writes[i].Cell)
+		cfg.Writes[i].Connection = qualifyRef(namespace, cfg.Writes[i].Connection)
 	}
 	for i := range cfg.Logic {
-		cfg.Logic[i].ID = qualifyID(cfg.Logic[i].ID)
-		cfg.Logic[i].Target = qualifyRef(cfg.Logic[i].Target)
+		namespace := combineNamespaces(root, cfg.Logic[i].Source.Package)
+		cfg.Logic[i].ID = qualifyID(namespace, cfg.Logic[i].ID)
+		cfg.Logic[i].Target = qualifyRef(namespace, cfg.Logic[i].Target)
 		for j := range cfg.Logic[i].Dependencies {
-			cfg.Logic[i].Dependencies[j].Cell = qualifyRef(cfg.Logic[i].Dependencies[j].Cell)
+			cfg.Logic[i].Dependencies[j].Cell = qualifyRef(namespace, cfg.Logic[i].Dependencies[j].Cell)
 		}
 	}
+	serverNamespace := combineNamespaces(root, cfg.Source.Package)
 	for i := range cfg.Server.Cells {
-		cfg.Server.Cells[i].Cell = qualifyRef(cfg.Server.Cells[i].Cell)
+		cfg.Server.Cells[i].Cell = qualifyRef(serverNamespace, cfg.Server.Cells[i].Cell)
 	}
-	cfg.Policies.WatchdogCell = qualifyRef(cfg.Policies.WatchdogCell)
+	cfg.Policies.WatchdogCell = qualifyRef(serverNamespace, cfg.Policies.WatchdogCell)
+}
+
+func combineNamespaces(root, module string) string {
+	root = strings.TrimSpace(root)
+	module = strings.TrimSpace(module)
+	switch {
+	case root == "" && module == "":
+		return ""
+	case root == "":
+		return module
+	case module == "":
+		return root
+	case module == root || strings.HasPrefix(module, root+"."):
+		return module
+	default:
+		return strings.TrimSuffix(root, ".") + "." + strings.Trim(module, ".")
+	}
 }
 
 func qualifyIdentifier(pkg, id string) string {
@@ -962,6 +1027,303 @@ func mergeInitialSource(child, meta ModuleReference) ModuleReference {
 		child.Package = meta.Package
 	}
 	return child
+}
+
+func captureDeclaredSourcePackages(configVal cue.Value, cfg *Config) moduleAssignments {
+	assignments := gatherModuleAssignments(configVal)
+
+	if cfg == nil {
+		return assignments
+	}
+
+	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("connections"))), len(cfg.Connections), func(i int, pkg string) {
+		cfg.Connections[i].Source.Package = pkg
+	})
+	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("cells"))), len(cfg.Cells), func(i int, pkg string) {
+		cfg.Cells[i].Source.Package = pkg
+	})
+	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("programs"))), len(cfg.Programs), func(i int, pkg string) {
+		cfg.Programs[i].Source.Package = pkg
+	})
+	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("reads"))), len(cfg.Reads), func(i int, pkg string) {
+		cfg.Reads[i].Source.Package = pkg
+	})
+	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("writes"))), len(cfg.Writes), func(i int, pkg string) {
+		cfg.Writes[i].Source.Package = pkg
+	})
+	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("logic"))), len(cfg.Logic), func(i int, pkg string) {
+		cfg.Logic[i].Source.Package = pkg
+	})
+
+	applyModuleAssignments(cfg, assignments)
+	return assignments
+}
+
+func captureListPackages(list cue.Value, count int, assign func(int, string)) {
+	if assign == nil || count == 0 || !list.Exists() {
+		return
+	}
+	iter, err := list.List()
+	if err != nil {
+		return
+	}
+	idx := 0
+	for ; iter.Next() && idx < count; idx++ {
+		pkg := extractPackageFromValue(iter.Value())
+		if pkg == "" {
+			continue
+		}
+		assign(idx, pkg)
+	}
+}
+
+type moduleAssignments struct {
+	connections map[string]string
+	cells       map[string]string
+	programs    map[string]string
+	reads       map[string]string
+	writes      map[string]string
+	logic       map[string]string
+	packages    map[string]struct{}
+	modules     []modulePackageInfo
+}
+
+func newModuleAssignments() moduleAssignments {
+	return moduleAssignments{
+		connections: make(map[string]string),
+		cells:       make(map[string]string),
+		programs:    make(map[string]string),
+		reads:       make(map[string]string),
+		writes:      make(map[string]string),
+		logic:       make(map[string]string),
+		packages:    make(map[string]struct{}),
+		modules:     make([]modulePackageInfo, 0),
+	}
+}
+
+type modulePackageInfo struct {
+	pkg     string
+	hasRoot bool
+}
+
+func gatherModuleAssignments(val cue.Value) moduleAssignments {
+	assignments := newModuleAssignments()
+	if !val.Exists() {
+		return assignments
+	}
+
+	op, conjuncts := val.Expr()
+	if op != cue.AndOp || len(conjuncts) == 0 {
+		pkg := extractPackageFromValue(val)
+		hasRoot := moduleDefinesRootFields(val)
+		if partial, err := decodeConfigFragment(val); err == nil {
+			assignments.recordPartial(partial, pkg, hasRoot)
+		}
+		return assignments
+	}
+
+	for _, conj := range conjuncts {
+		pkg := extractPackageFromValue(conj)
+		hasRoot := moduleDefinesRootFields(conj)
+		partial, err := decodeConfigFragment(conj)
+		if err != nil {
+			continue
+		}
+		assignments.recordPartial(partial, pkg, hasRoot)
+	}
+
+	return assignments
+}
+
+func decodeConfigFragment(val cue.Value) (*Config, error) {
+	evaluated := val
+	if def, ok := val.Default(); ok {
+		evaluated = def
+	} else {
+		evaluated = val.Eval()
+	}
+	if !evaluated.Exists() {
+		return nil, errors.New("config fragment does not exist")
+	}
+	data, err := evaluated.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	var partial Config
+	if err := json.Unmarshal(data, &partial); err != nil {
+		return nil, err
+	}
+	return &partial, nil
+}
+
+func moduleDefinesRootFields(val cue.Value) bool {
+	if !val.Exists() {
+		return false
+	}
+	node := val.Source()
+	field, ok := node.(*ast.Field)
+	if !ok {
+		return false
+	}
+	switch expr := field.Value.(type) {
+	case *ast.StructLit:
+		return true
+	case *ast.BinaryExpr:
+		if expr.Op == token.AND {
+			return false
+		}
+	}
+	return false
+}
+
+func (m *moduleAssignments) recordPartial(partial *Config, pkg string, hasRoot bool) {
+	if partial == nil {
+		return
+	}
+	trimmedPkg := strings.TrimSpace(pkg)
+	if m.packages != nil && trimmedPkg != "" {
+		m.packages[trimmedPkg] = struct{}{}
+	}
+	m.modules = append(m.modules, modulePackageInfo{pkg: trimmedPkg, hasRoot: hasRoot})
+
+	if trimmedPkg == "" {
+		// still record module info even without package but skip ID assignments
+		return
+	}
+
+	record := func(mapping map[string]string, id string) {
+		key := strings.TrimSpace(id)
+		if key == "" {
+			return
+		}
+		if _, exists := mapping[key]; !exists {
+			mapping[key] = trimmedPkg
+		}
+	}
+
+	for _, conn := range partial.Connections {
+		record(m.connections, conn.ID)
+	}
+	for _, cell := range partial.Cells {
+		record(m.cells, cell.ID)
+	}
+	for _, program := range partial.Programs {
+		record(m.programs, program.ID)
+	}
+	for _, read := range partial.Reads {
+		record(m.reads, read.ID)
+	}
+	for _, write := range partial.Writes {
+		record(m.writes, write.ID)
+	}
+	for _, logic := range partial.Logic {
+		record(m.logic, logic.ID)
+	}
+}
+
+func applyModuleAssignments(cfg *Config, assignments moduleAssignments) {
+	if cfg == nil {
+		return
+	}
+
+	assign := func(ref *ModuleReference, id string, mapping map[string]string) {
+		if ref == nil {
+			return
+		}
+		if strings.TrimSpace(ref.Package) != "" {
+			return
+		}
+		key := strings.TrimSpace(id)
+		if key == "" {
+			return
+		}
+		if pkg, ok := mapping[key]; ok && strings.TrimSpace(pkg) != "" {
+			ref.Package = pkg
+		}
+	}
+
+	for i := range cfg.Connections {
+		assign(&cfg.Connections[i].Source, cfg.Connections[i].ID, assignments.connections)
+	}
+	for i := range cfg.Cells {
+		assign(&cfg.Cells[i].Source, cfg.Cells[i].ID, assignments.cells)
+	}
+	for i := range cfg.Programs {
+		assign(&cfg.Programs[i].Source, cfg.Programs[i].ID, assignments.programs)
+	}
+	for i := range cfg.Reads {
+		assign(&cfg.Reads[i].Source, cfg.Reads[i].ID, assignments.reads)
+	}
+	for i := range cfg.Writes {
+		assign(&cfg.Writes[i].Source, cfg.Writes[i].ID, assignments.writes)
+	}
+	for i := range cfg.Logic {
+		assign(&cfg.Logic[i].Source, cfg.Logic[i].ID, assignments.logic)
+	}
+}
+
+func determineRootNamespace(cuePkg, explicit string, assignments moduleAssignments) string {
+	trimmedExplicit := strings.TrimSpace(explicit)
+	hasRootModule := false
+	if trimmedExplicit != "" {
+		for _, info := range assignments.modules {
+			if info.hasRoot {
+				hasRootModule = true
+				if info.pkg == trimmedExplicit {
+					return trimmedExplicit
+				}
+			}
+		}
+		if !hasRootModule && len(assignments.packages) <= 1 {
+			return trimmedExplicit
+		}
+	}
+
+	for _, info := range assignments.modules {
+		if info.hasRoot {
+			if trimmed := strings.TrimSpace(info.pkg); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+
+	if trimmedCue := strings.TrimSpace(cuePkg); trimmedCue != "" {
+		return trimmedCue
+	}
+
+	for pkg := range assignments.packages {
+		if trimmed := strings.TrimSpace(pkg); trimmed != "" {
+			return trimmed
+		}
+	}
+
+	return ""
+}
+
+func extractPackageFromValue(val cue.Value) string {
+	if !val.Exists() {
+		return ""
+	}
+	for _, path := range []cue.Path{
+		cue.MakePath(cue.Str("source"), cue.Str("package")),
+		cue.MakePath(cue.Str("package")),
+	} {
+		if pkg := readString(val.LookupPath(path)); pkg != "" {
+			return pkg
+		}
+	}
+	return ""
+}
+
+func readString(val cue.Value) string {
+	if !val.Exists() {
+		return ""
+	}
+	str, err := val.String()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(str)
 }
 
 func firstNonEmpty(values ...string) string {
