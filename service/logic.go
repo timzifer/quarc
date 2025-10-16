@@ -152,6 +152,19 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 	meta := make(map[string]*dependencyMeta)
 	thresholds := make(map[string]float64)
 
+	qualify := func(id string) string {
+		if id == "" {
+			return id
+		}
+		if strings.Contains(id, ":") {
+			return id
+		}
+		if pkg := cfg.Source.Package; pkg != "" {
+			return pkg + ":" + id
+		}
+		return id
+	}
+
 	ensure := func(id string) *dependencyMeta {
 		if id == "" {
 			return nil
@@ -179,22 +192,23 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 	qualityIDs := make(map[string]struct{})
 
 	for _, depCfg := range cfg.Dependencies {
-		entry := ensure(depCfg.Cell)
+		qualified := qualify(depCfg.Cell)
+		entry := ensure(qualified)
 		if entry == nil {
 			continue
 		}
 		entry.expression = true
 		entry.configured = true
-		thresholds[depCfg.Cell] = depCfg.Threshold
-		depCell, depErr := cells.mustGet(depCfg.Cell)
+		thresholds[qualified] = depCfg.Threshold
+		depCell, depErr := cells.mustGet(qualified)
 		if depErr != nil {
-			return block, meta, fmt.Errorf("logic block %s dependency %s: %w", cfg.ID, depCfg.Cell, depErr)
+			return block, meta, fmt.Errorf("logic block %s dependency %s: %w", cfg.ID, qualified, depErr)
 		}
 		if depCfg.Type != "" && depCell.cfg.Type != depCfg.Type {
-			return block, meta, fmt.Errorf("logic block %s dependency %s expects %s but cell is %s", cfg.ID, depCfg.Cell, depCfg.Type, depCell.cfg.Type)
+			return block, meta, fmt.Errorf("logic block %s dependency %s expects %s but cell is %s", cfg.ID, qualified, depCfg.Type, depCell.cfg.Type)
 		}
 		entry.cell = depCell
-		expressionIDs[depCfg.Cell] = struct{}{}
+		expressionIDs[qualified] = struct{}{}
 	}
 
 	var helperNames map[string]struct{}
@@ -209,12 +223,13 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 		}
 		block.expression = program
 		for _, dep := range uniqueDependencies(program, helperNames) {
-			entry := ensure(dep)
+			qualified := qualify(dep)
+			entry := ensure(qualified)
 			if entry == nil {
 				continue
 			}
 			entry.expression = true
-			expressionIDs[dep] = struct{}{}
+			expressionIDs[qualified] = struct{}{}
 		}
 	}
 
@@ -225,12 +240,13 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 		}
 		block.validExpr = program
 		for _, dep := range uniqueDependencies(program, helperNames) {
-			entry := ensure(dep)
+			qualified := qualify(dep)
+			entry := ensure(qualified)
 			if entry == nil {
 				continue
 			}
 			entry.valid = true
-			validIDs[dep] = struct{}{}
+			validIDs[qualified] = struct{}{}
 		}
 	}
 
@@ -241,12 +257,13 @@ func prepareLogicBlock(cfg config.LogicBlockConfig, cells *cellStore, dsl *dslEn
 		}
 		block.qualityExpr = program
 		for _, dep := range uniqueDependencies(program, helperNames) {
-			entry := ensure(dep)
+			qualified := qualify(dep)
+			entry := ensure(qualified)
 			if entry == nil {
 				continue
 			}
 			entry.quality = true
-			qualityIDs[dep] = struct{}{}
+			qualityIDs[qualified] = struct{}{}
 		}
 	}
 
@@ -672,6 +689,7 @@ func (b *logicBlock) runExpression(snapshot map[string]*snapshotValue) (interfac
 		originID:       b.cfg.ID,
 		expression:     trimmedExpr,
 		expressionKind: "expression",
+		pkgPrefix:      b.cfg.Source.Package,
 	}
 	env["value"] = ctx.value
 	env["cell"] = ctx.value
@@ -935,6 +953,7 @@ func (b *logicBlock) buildValidationEnv(snapshot map[string]*snapshotValue, valu
 		originID:       b.cfg.ID,
 		expression:     trimmedExpr,
 		expressionKind: kind,
+		pkgPrefix:      b.cfg.Source.Package,
 	}
 	env["cell"] = ctx.value
 	env["value_fn"] = ctx.value
@@ -1192,21 +1211,34 @@ type dslContext struct {
 	originID       string
 	expression     string
 	expressionKind string
+	pkgPrefix      string
+}
+
+func (c *dslContext) qualify(id string) string {
+	if id == "" || strings.Contains(id, ":") {
+		return id
+	}
+	if c == nil || c.pkgPrefix == "" {
+		return id
+	}
+	return c.pkgPrefix + ":" + id
 }
 
 func (c *dslContext) value(id string) interface{} {
-	snap := c.snapshot[id]
+	qualified := c.qualify(id)
+	snap := c.snapshot[qualified]
 	if snap == nil {
-		panic(evaluationError{Code: "logic.dependency_missing", Message: fmt.Sprintf("dependency %s missing", id)})
+		panic(evaluationError{Code: "logic.dependency_missing", Message: fmt.Sprintf("dependency %s missing", qualified)})
 	}
 	if !snap.Valid {
-		panic(evaluationError{Code: "logic.dependency_invalid", Message: fmt.Sprintf("dependency %s invalid", id)})
+		panic(evaluationError{Code: "logic.dependency_invalid", Message: fmt.Sprintf("dependency %s invalid", qualified)})
 	}
 	return snap.Value
 }
 
 func (c *dslContext) valid(id string) bool {
-	snap := c.snapshot[id]
+	qualified := c.qualify(id)
+	snap := c.snapshot[qualified]
 	return snap != nil && snap.Valid
 }
 

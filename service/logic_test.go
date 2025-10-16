@@ -211,6 +211,74 @@ func TestHelperFunctionUsage(t *testing.T) {
 	}
 }
 
+func TestLogicBlockValueHelperUsesPackagePrefix(t *testing.T) {
+	dsl, err := newDSLEngine(config.DSLConfig{}, nil, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("newDSLEngine: %v", err)
+	}
+
+	cells, err := newCellStore([]config.CellConfig{
+		{ID: "pkg:input", Type: config.ValueKindNumber},
+		{ID: "pkg:result", Type: config.ValueKindNumber},
+	})
+	if err != nil {
+		t.Fatalf("newCellStore: %v", err)
+	}
+
+	cfg := config.LogicBlockConfig{
+		ID:         "pkg.block",
+		Target:     "pkg:result",
+		Expression: "value(\"input\")",
+		Valid:      "valid(\"input\")",
+		Dependencies: []config.DependencyConfig{
+			{Cell: "pkg:input", Type: config.ValueKindNumber},
+		},
+	}
+	cfg.Source.Package = "pkg"
+
+	block, _, err := prepareLogicBlock(cfg, cells, dsl, 0, nil)
+	if err != nil {
+		t.Fatalf("prepareLogicBlock: %v", err)
+	}
+
+	now := time.Now()
+	input, err := cells.mustGet("pkg:input")
+	if err != nil {
+		t.Fatalf("mustGet input: %v", err)
+	}
+	const expected = 21.0
+	if err := input.setValue(expected, now, nil); err != nil {
+		t.Fatalf("setValue: %v", err)
+	}
+
+	snapshot := cells.snapshot()
+	result, exprErr := block.runExpression(snapshot)
+	if exprErr != nil {
+		t.Fatalf("runExpression: %v", exprErr)
+	}
+	if got, ok := result.(float64); !ok || got != expected {
+		t.Fatalf("unexpected expression result: %v (%T)", result, result)
+	}
+
+	decision, valErr := block.runValidation(snapshot, result, nil)
+	if valErr != nil {
+		t.Fatalf("runValidation: %v", valErr)
+	}
+	if !decision.valid {
+		t.Fatalf("expected validator to mark result valid: %+v", decision)
+	}
+
+	input.markInvalid(now, "test.invalid", "forced")
+	snapshot = cells.snapshot()
+	decision, valErr = block.runValidation(snapshot, nil, nil)
+	if valErr != nil {
+		t.Fatalf("runValidation after invalidation: %v", valErr)
+	}
+	if decision.valid {
+		t.Fatalf("expected validator to mark result invalid after dependency invalidation")
+	}
+}
+
 func TestParseDSLLogLevel(t *testing.T) {
 	cases := []struct {
 		name      string
