@@ -7,12 +7,14 @@ import (
 	"html/template"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/timzifer/quarc/config"
 	"github.com/timzifer/quarc/runtime/readers"
+	"github.com/timzifer/quarc/runtime/writers"
 )
 
 type liveViewServer struct {
@@ -35,6 +37,8 @@ type liveStateResponse struct {
 
 type liveCell struct {
 	ID          string                 `json:"id"`
+	Package     string                 `json:"package,omitempty"`
+	LocalID     string                 `json:"local_id,omitempty"`
 	Name        string                 `json:"name,omitempty"`
 	Description string                 `json:"description,omitempty"`
 	Kind        string                 `json:"kind"`
@@ -48,6 +52,8 @@ type liveCell struct {
 
 type liveLogicBlock struct {
 	ID      string                 `json:"id"`
+	Package string                 `json:"package,omitempty"`
+	LocalID string                 `json:"local_id,omitempty"`
 	Target  string                 `json:"target"`
 	Calls   uint64                 `json:"calls"`
 	Skipped uint64                 `json:"skipped"`
@@ -69,6 +75,8 @@ type liveWorker struct {
 
 type liveReadGroup struct {
 	ID             string                      `json:"id"`
+	Package        string                      `json:"package,omitempty"`
+	LocalID        string                      `json:"local_id,omitempty"`
 	Function       string                      `json:"function"`
 	Start          uint16                      `json:"start"`
 	Length         uint16                      `json:"length"`
@@ -105,6 +113,8 @@ type liveSignalAggregationStatus struct {
 
 type liveWriteTarget struct {
 	ID             string                 `json:"id"`
+	Package        string                 `json:"package,omitempty"`
+	LocalID        string                 `json:"local_id,omitempty"`
 	Cell           string                 `json:"cell"`
 	Function       string                 `json:"function"`
 	Address        uint16                 `json:"address"`
@@ -147,9 +157,39 @@ func isJSONNull(raw *json.RawMessage) bool {
 	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null"))
 }
 
+func splitIdentifier(id string, source config.ModuleReference) (string, string) {
+	pkg := strings.TrimSpace(source.Package)
+	local := id
+	if pkg != "" {
+		prefix := pkg + ":"
+		if strings.HasPrefix(id, prefix) {
+			trimmed := strings.TrimPrefix(id, prefix)
+			if trimmed != "" {
+				local = trimmed
+			}
+		}
+		return pkg, local
+	}
+	if idx := strings.Index(id, ":"); idx >= 0 && idx < len(id)-1 {
+		pkg = id[:idx]
+		local = id[idx+1:]
+	}
+	return pkg, local
+}
+
+func lessByPackageAndLocal(apkg, alocal, bpkg, blocal string) bool {
+	if apkg == bpkg {
+		return alocal < blocal
+	}
+	return apkg < bpkg
+}
+
 func toLiveCell(state CellState) liveCell {
+	pkg, local := splitIdentifier(state.ID, state.Source)
 	return liveCell{
 		ID:          state.ID,
+		Package:     pkg,
+		LocalID:     local,
 		Name:        state.Name,
 		Description: state.Description,
 		Kind:        string(state.Kind),
@@ -176,8 +216,11 @@ func toLiveSignalAggregate(agg readers.SignalAggregate) *liveSignalAggregate {
 }
 
 func toLiveReadGroup(status readers.ReadGroupStatus) liveReadGroup {
+	pkg, local := splitIdentifier(status.ID, status.Source)
 	group := liveReadGroup{
 		ID:             status.ID,
+		Package:        pkg,
+		LocalID:        local,
 		Function:       status.Function,
 		Start:          status.Start,
 		Length:         status.Length,
@@ -210,6 +253,23 @@ func toLiveReadGroup(status readers.ReadGroupStatus) liveReadGroup {
 		group.Buffers = buffers
 	}
 	return group
+}
+
+func toLiveWriteTarget(status writers.WriteTargetStatus) liveWriteTarget {
+	pkg, local := splitIdentifier(status.ID, status.Source)
+	return liveWriteTarget{
+		ID:             status.ID,
+		Package:        pkg,
+		LocalID:        local,
+		Cell:           status.Cell,
+		Function:       status.Function,
+		Address:        status.Address,
+		Disabled:       status.Disabled,
+		LastWrite:      timePtr(status.LastWrite),
+		LastAttempt:    timePtr(status.LastAttempt),
+		LastDurationMS: durationToMillis(status.LastDuration),
+		Source:         status.Source,
+	}
 }
 
 type controlRequest struct {
@@ -266,11 +326,17 @@ func (s *liveViewServer) handleState(w http.ResponseWriter, r *http.Request) {
 	for _, state := range states {
 		cells = append(cells, toLiveCell(state))
 	}
+	sort.Slice(cells, func(i, j int) bool {
+		return lessByPackageAndLocal(cells[i].Package, cells[i].LocalID, cells[j].Package, cells[j].LocalID)
+	})
 	logicStates := s.service.LogicStates()
 	logic := make([]liveLogicBlock, 0, len(logicStates))
 	for _, entry := range logicStates {
+		pkg, local := splitIdentifier(entry.ID, entry.Source)
 		logic = append(logic, liveLogicBlock{
 			ID:      entry.ID,
+			Package: pkg,
+			LocalID: local,
 			Target:  entry.Target,
 			Calls:   entry.Metrics.Calls,
 			Skipped: entry.Metrics.Skipped,
@@ -279,26 +345,25 @@ func (s *liveViewServer) handleState(w http.ResponseWriter, r *http.Request) {
 			Source:  entry.Source,
 		})
 	}
+	sort.Slice(logic, func(i, j int) bool {
+		return lessByPackageAndLocal(logic[i].Package, logic[i].LocalID, logic[j].Package, logic[j].LocalID)
+	})
 	readStatuses := s.service.ReadStatuses()
 	reads := make([]liveReadGroup, 0, len(readStatuses))
 	for _, status := range readStatuses {
 		reads = append(reads, toLiveReadGroup(status))
 	}
+	sort.Slice(reads, func(i, j int) bool {
+		return lessByPackageAndLocal(reads[i].Package, reads[i].LocalID, reads[j].Package, reads[j].LocalID)
+	})
 	writeStatuses := s.service.WriteStatuses()
 	writes := make([]liveWriteTarget, 0, len(writeStatuses))
 	for _, status := range writeStatuses {
-		writes = append(writes, liveWriteTarget{
-			ID:             status.ID,
-			Cell:           status.Cell,
-			Function:       status.Function,
-			Address:        status.Address,
-			Disabled:       status.Disabled,
-			LastWrite:      timePtr(status.LastWrite),
-			LastAttempt:    timePtr(status.LastAttempt),
-			LastDurationMS: durationToMillis(status.LastDuration),
-			Source:         status.Source,
-		})
+		writes = append(writes, toLiveWriteTarget(status))
 	}
+	sort.Slice(writes, func(i, j int) bool {
+		return lessByPackageAndLocal(writes[i].Package, writes[i].LocalID, writes[j].Package, writes[j].LocalID)
+	})
 	sys := s.service.SystemLoad()
 	workers := make([]liveWorker, 0, len(sys.Workers))
 	for _, worker := range sys.Workers {
@@ -466,16 +531,7 @@ func (s *liveViewServer) handleWriteControl(w http.ResponseWriter, r *http.Reque
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	resp := liveWriteTarget{
-		ID:             status.ID,
-		Cell:           status.Cell,
-		Function:       status.Function,
-		Address:        status.Address,
-		Disabled:       status.Disabled,
-		LastWrite:      timePtr(status.LastWrite),
-		LastAttempt:    timePtr(status.LastAttempt),
-		LastDurationMS: durationToMillis(status.LastDuration),
-	}
+	resp := toLiveWriteTarget(status)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		s.logger.Error().Err(err).Str("write", id).Msg("encode write toggle response")
@@ -589,7 +645,7 @@ tr.invalid td { color: #b71c1c; }
 <div class="tab-content active" id="tab-cells">
 <table id="cells">
 <thead>
-<tr><th>ID</th><th>Typ</th><th>Wert</th><th>Gültig</th><th>Quality</th><th>Aktualisiert</th><th>Diagnose</th><th>Aktionen</th></tr>
+<tr><th>Package</th><th>ID</th><th>Typ</th><th>Wert</th><th>Gültig</th><th>Quality</th><th>Aktualisiert</th><th>Diagnose</th><th>Aktionen</th></tr>
 </thead>
 <tbody></tbody>
 </table>
@@ -597,7 +653,7 @@ tr.invalid td { color: #b71c1c; }
 <div class="tab-content" id="tab-logic">
 <table id="logic">
 <thead>
-<tr><th>ID</th><th>Ziel</th><th>Aufrufe</th><th>Übersprungen</th><th>Ø Dauer (ms)</th><th>Letzte Dauer (ms)</th></tr>
+<tr><th>Package</th><th>ID</th><th>Ziel</th><th>Aufrufe</th><th>Übersprungen</th><th>Ø Dauer (ms)</th><th>Letzte Dauer (ms)</th></tr>
 </thead>
 <tbody></tbody>
 </table>
@@ -606,14 +662,14 @@ tr.invalid td { color: #b71c1c; }
 <h2 class="section-title">Reads</h2>
 <table id="reads">
 <thead>
-<tr><th>ID</th><th>Funktion</th><th>Range</th><th>Status</th><th>Nächster Lauf</th><th>Letzte Dauer (ms)</th><th>Puffer</th><th>Aktionen</th></tr>
+<tr><th>Package</th><th>ID</th><th>Funktion</th><th>Range</th><th>Status</th><th>Nächster Lauf</th><th>Letzte Dauer (ms)</th><th>Puffer</th><th>Aktionen</th></tr>
 </thead>
 <tbody></tbody>
 </table>
 <h2 class="section-title">Writes</h2>
 <table id="writes">
 <thead>
-<tr><th>ID</th><th>Cell</th><th>Funktion</th><th>Status</th><th>Letzter Schreibvorgang</th><th>Letzte Dauer (ms)</th><th>Aktionen</th></tr>
+<tr><th>Package</th><th>ID</th><th>Cell</th><th>Funktion</th><th>Status</th><th>Letzter Schreibvorgang</th><th>Letzte Dauer (ms)</th><th>Aktionen</th></tr>
 </thead>
 <tbody></tbody>
 </table>
@@ -1330,7 +1386,8 @@ function renderCells(cells, editable) {
     actions.appendChild(saveBtn);
     const diagText = cell.diagnosis ? ((cell.diagnosis.code || '') + ' ' + (cell.diagnosis.message || '')).trim() : '';
     let rowHtml = '';
-    rowHtml += '<td>' + cell.id + '</td>';
+    rowHtml += '<td>' + (cell.package || '') + '</td>';
+    rowHtml += '<td>' + (cell.local_id || cell.id) + '</td>';
     rowHtml += '<td>' + cell.kind + '</td>';
     rowHtml += '<td></td>';
     rowHtml += '<td></td>';
@@ -1339,10 +1396,10 @@ function renderCells(cells, editable) {
     rowHtml += '<td class="diag">' + diagText + '</td>';
     rowHtml += '<td></td>';
     tr.innerHTML = rowHtml;
-    tr.children[2].appendChild(valueInfo.element);
-    tr.children[3].appendChild(validInput);
-    tr.children[4].appendChild(qualityInput);
-    tr.children[7].appendChild(actions);
+    tr.children[3].appendChild(valueInfo.element);
+    tr.children[4].appendChild(validInput);
+    tr.children[5].appendChild(qualityInput);
+    tr.children[8].appendChild(actions);
     cellsBody.appendChild(tr);
   });
 }
@@ -1352,7 +1409,8 @@ function renderLogic(entries) {
   (entries || []).forEach(function(entry) {
     const tr = document.createElement('tr');
     let rowHtml = '';
-    rowHtml += '<td>' + entry.id + '</td>';
+    rowHtml += '<td>' + (entry.package || '') + '</td>';
+    rowHtml += '<td>' + (entry.local_id || entry.id) + '</td>';
     rowHtml += '<td>' + (entry.target || '') + '</td>';
     rowHtml += '<td>' + (entry.calls || 0) + '</td>';
     rowHtml += '<td>' + (entry.skipped || 0) + '</td>';
@@ -1370,7 +1428,8 @@ function renderReads(reads) {
     const range = typeof read.length === 'number' ? (read.start + ' (+' + read.length + ')') : String(read.start || 0);
     const status = read.disabled ? '<span class="badge-disabled">Deaktiviert</span>' : 'Aktiv';
     let rowHtml = '';
-    rowHtml += '<td>' + read.id + '</td>';
+    rowHtml += '<td>' + (read.package || '') + '</td>';
+    rowHtml += '<td>' + (read.local_id || read.id) + '</td>';
     rowHtml += '<td>' + read.function + '</td>';
     rowHtml += '<td>' + range + '</td>';
     rowHtml += '<td>' + status + '</td>';
@@ -1390,7 +1449,8 @@ function renderWrites(writes) {
     const status = write.disabled ? '<span class="badge-disabled">Deaktiviert</span>' : 'Aktiv';
     const timestamp = formatTimestamp(write.last_write || write.last_attempt);
     let rowHtml = '';
-    rowHtml += '<td>' + write.id + '</td>';
+    rowHtml += '<td>' + (write.package || '') + '</td>';
+    rowHtml += '<td>' + (write.local_id || write.id) + '</td>';
     rowHtml += '<td>' + write.cell + '</td>';
     rowHtml += '<td>' + write.function + '</td>';
     rowHtml += '<td>' + status + '</td>';

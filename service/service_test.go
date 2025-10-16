@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1193,5 +1195,61 @@ func TestValidateFailsOnDuplicateProgramOutputs(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "already bound by program prog1") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestServiceStateResponseContainsSplitIdentifiers(t *testing.T) {
+	_, _, _, ts := newLiveViewTestServer(t)
+
+	resp, err := ts.Client().Get(ts.URL + "/api/state")
+	if err != nil {
+		t.Fatalf("request state: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
+	}
+
+	var payload struct {
+		Cells []struct {
+			ID      string `json:"id"`
+			Package string `json:"package"`
+			LocalID string `json:"local_id"`
+		} `json:"cells"`
+		Reads []struct {
+			ID      string `json:"id"`
+			Package string `json:"package"`
+			LocalID string `json:"local_id"`
+		} `json:"reads"`
+		Writes []struct {
+			ID      string `json:"id"`
+			Package string `json:"package"`
+			LocalID string `json:"local_id"`
+		} `json:"writes"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode state payload: %v", err)
+	}
+
+	if len(payload.Cells) == 0 {
+		t.Fatal("expected cell payload")
+	}
+	if payload.Cells[0].Package == "" || payload.Cells[0].LocalID == "" {
+		t.Fatalf("expected split identifiers for cells, got %+v", payload.Cells[0])
+	}
+
+	if len(payload.Reads) == 0 {
+		t.Fatal("expected read payload")
+	}
+	if payload.Reads[0].Package == "" || payload.Reads[0].LocalID == "" {
+		t.Fatalf("expected split identifiers for reads, got %+v", payload.Reads[0])
+	}
+
+	if len(payload.Writes) == 0 {
+		t.Fatal("expected write payload")
+	}
+	if payload.Writes[0].Package == "" || payload.Writes[0].LocalID == "" {
+		t.Fatalf("expected split identifiers for writes, got %+v", payload.Writes[0])
 	}
 }
