@@ -13,6 +13,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/timzifer/quarc/config"
+	"github.com/timzifer/quarc/runtime/connections"
 	"github.com/timzifer/quarc/runtime/readers"
 	"github.com/timzifer/quarc/runtime/state"
 	"github.com/timzifer/quarc/runtime/writers"
@@ -42,6 +43,8 @@ type Service struct {
 	metrics       metrics
 	lastCycleTime time.Time
 	telemetry     telemetry.Collector
+
+	connections *connectionManager
 
 	controller *cycleController
 	cycle      atomic.Int64
@@ -164,14 +167,16 @@ func (s systemLoad) snapshot() systemLoadSnapshot {
 type Option func(*factoryRegistry)
 
 type factoryRegistry struct {
-	readers map[string]readers.ReaderFactory
-	writers map[string]writers.WriterFactory
+	readers     map[string]readers.ReaderFactory
+	writers     map[string]writers.WriterFactory
+	connections map[string]connections.Factory
 }
 
 func newFactoryRegistry() factoryRegistry {
 	return factoryRegistry{
-		readers: make(map[string]readers.ReaderFactory),
-		writers: make(map[string]writers.WriterFactory),
+		readers:     make(map[string]readers.ReaderFactory),
+		writers:     make(map[string]writers.WriterFactory),
+		connections: make(map[string]connections.Factory),
 	}
 }
 
@@ -224,6 +229,26 @@ func WithWriterFactory(driver string, factory writers.WriterFactory) Option {
 	}
 }
 
+// WithConnectionFactory registers a reusable connection factory for a driver identifier.
+func WithConnectionFactory(driver string, factory connections.Factory) Option {
+	return func(reg *factoryRegistry) {
+		if reg == nil {
+			return
+		}
+		if reg.connections == nil {
+			reg.connections = make(map[string]connections.Factory)
+		}
+		if driver == "" {
+			return
+		}
+		if factory == nil {
+			delete(reg.connections, driver)
+			return
+		}
+		reg.connections[driver] = factory
+	}
+}
+
 // New builds a service from configuration and dependencies.
 func New(cfg *config.Config, logger zerolog.Logger, opts ...Option) (*Service, error) {
 	if cfg == nil {
@@ -256,11 +281,23 @@ func New(cfg *config.Config, logger zerolog.Logger, opts ...Option) (*Service, e
 	svc.heatmap = newHeatmapSettings(cfg.LiveView.Heatmap)
 	svc.activity = newActivityTracker(&svc.cycleIndex, svc.heatmap)
 
-	bufferStore := readers.NewSignalBufferStore()
-	deps := readers.ReaderDependencies{Cells: cells, Activity: svc.activity, Buffers: bufferStore}
-	reads, bufferCells, bufferGroups, err := buildReadGroups(cfg.Reads, deps, registry.readers)
+	connManager, err := newConnectionManager(cfg.Connections, registry.connections)
 	if err != nil {
 		return nil, err
+	}
+	svc.connections = connManager
+	cleanupOnErr := func(err error) (*Service, error) {
+		if svc.connections != nil {
+			_ = svc.connections.Close()
+		}
+		return nil, err
+	}
+
+	bufferStore := readers.NewSignalBufferStore()
+	deps := readers.ReaderDependencies{Cells: cells, Activity: svc.activity, Buffers: bufferStore, Connections: connManager}
+	reads, bufferCells, bufferGroups, err := buildReadGroups(cfg.Reads, deps, registry.readers)
+	if err != nil {
+		return cleanupOnErr(err)
 	}
 	svc.reads = reads
 	svc.buffers = bufferStore
@@ -285,20 +322,20 @@ func New(cfg *config.Config, logger zerolog.Logger, opts ...Option) (*Service, e
 
 	logic, ordered, err := newLogicBlocks(cfg.Logic, cells, dsl, logger, svc.activity)
 	if err != nil {
-		return nil, err
+		return cleanupOnErr(err)
 	}
 	svc.logic = logic
 	svc.ordered = ordered
 
 	programs, err := newProgramBindings(cfg.Programs, cells, logger, svc.activity)
 	if err != nil {
-		return nil, err
+		return cleanupOnErr(err)
 	}
 	svc.programs = programs
 
-	writes, err := buildWriteTargets(cfg.Writes, writers.WriterDependencies{Cells: cells}, registry.writers)
+	writes, err := buildWriteTargets(cfg.Writes, writers.WriterDependencies{Cells: cells, Connections: connManager}, registry.writers)
 	if err != nil {
-		return nil, err
+		return cleanupOnErr(err)
 	}
 	svc.writes = writes
 	if cfg.Server.Enabled {
@@ -380,6 +417,9 @@ func buildReadGroups(cfgs []config.ReadGroupConfig, deps readers.ReaderDependenc
 		if driver == "" {
 			return nil, nil, nil, fmt.Errorf("read group %s: endpoint missing driver", cfg.ID)
 		}
+		if cfg.Connection != "" && deps.Connections == nil {
+			return nil, nil, nil, fmt.Errorf("read group %s: connections manager not initialised", cfg.ID)
+		}
 		factory := factories[driver]
 		if factory == nil {
 			return nil, nil, nil, fmt.Errorf("read group %s: no reader factory registered for driver %s", cfg.ID, driver)
@@ -406,6 +446,9 @@ func buildWriteTargets(cfgs []config.WriteTargetConfig, deps writers.WriterDepen
 		driver := cfg.Endpoint.Driver
 		if driver == "" {
 			return nil, fmt.Errorf("write target %s: endpoint missing driver", cfg.ID)
+		}
+		if cfg.Connection != "" && deps.Connections == nil {
+			return nil, fmt.Errorf("write target %s: connections manager not initialised", cfg.ID)
 		}
 		factory := factories[driver]
 		if factory == nil {
@@ -435,7 +478,13 @@ func Validate(cfg *config.Config, logger zerolog.Logger, opts ...Option) error {
 	if err != nil {
 		return err
 	}
-	if _, _, _, err := buildReadGroups(cfg.Reads, readers.ReaderDependencies{Cells: cells, Buffers: readers.NewSignalBufferStore()}, registry.readers); err != nil {
+	connManager, err := newConnectionManager(cfg.Connections, registry.connections)
+	if err != nil {
+		return err
+	}
+	defer connManager.Close()
+	deps := readers.ReaderDependencies{Cells: cells, Buffers: readers.NewSignalBufferStore(), Connections: connManager}
+	if _, _, _, err := buildReadGroups(cfg.Reads, deps, registry.readers); err != nil {
 		return err
 	}
 	if _, _, err := newLogicBlocks(cfg.Logic, cells, dsl, logger, nil); err != nil {
@@ -444,7 +493,7 @@ func Validate(cfg *config.Config, logger zerolog.Logger, opts ...Option) error {
 	if _, err := newProgramBindings(cfg.Programs, cells, logger, nil); err != nil {
 		return err
 	}
-	if _, err := buildWriteTargets(cfg.Writes, writers.WriterDependencies{Cells: cells}, registry.writers); err != nil {
+	if _, err := buildWriteTargets(cfg.Writes, writers.WriterDependencies{Cells: cells, Connections: connManager}, registry.writers); err != nil {
 		return err
 	}
 	if cfg.Server.Enabled {
@@ -947,6 +996,9 @@ func (s *Service) Close() error {
 	}
 	for _, target := range s.writes {
 		target.Close()
+	}
+	if s.connections != nil {
+		_ = s.connections.Close()
 	}
 	if s.server != nil {
 		// Legacy embedded Modbus server support has been removed, but we

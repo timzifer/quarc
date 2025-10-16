@@ -118,6 +118,26 @@ config: {
         watchdog_cell: "watchdog"
     }
 
+    connections: [
+        {
+            id: "field_sensors"
+            driver: "modbus"
+            endpoint: {
+                address: "192.168.10.10:502"
+                unit_id: 1
+                timeout: "1s"
+            }
+        },
+        {
+            id: "heater_bus"
+            driver: "modbus"
+            endpoint: {
+                address: "192.168.10.20:502"
+                unit_id: 1
+            }
+        },
+    ]
+
     cells: [
         template.analogCell & {
             id: "raw_temperature"
@@ -181,10 +201,8 @@ config: {
     reads: [
         {
             id: "temperature_sensor"
+            connection: "field_sensors"
             endpoint: {
-                address: "192.168.10.10:502"
-                unit_id: 1
-                driver: "modbus"
                 timeout: "2s"
             }
             function: "holding"
@@ -346,10 +364,9 @@ config: {
         {
             id: "heater_output"
             cell: "heater_command"
+            connection: "heater_bus"
             endpoint: {
-                address: "192.168.10.20:502"
-                unit_id: 1
-                driver: "modbus"
+                timeout: "500ms"
             }
             function: "coil"
             address: 5

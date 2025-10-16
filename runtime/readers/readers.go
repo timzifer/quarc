@@ -7,6 +7,7 @@ import (
 
 	"github.com/timzifer/quarc/config"
 	"github.com/timzifer/quarc/runtime/activity"
+	"github.com/timzifer/quarc/runtime/connections"
 	"github.com/timzifer/quarc/runtime/state"
 )
 
@@ -47,9 +48,10 @@ type SignalBufferStatus struct {
 }
 
 type ReaderDependencies struct {
-	Cells    state.CellStore
-	Activity activity.Tracker
-	Buffers  *SignalBufferStore
+	Cells       state.CellStore
+	Activity    activity.Tracker
+	Buffers     *SignalBufferStore
+	Connections connections.Provider
 }
 
 // ReaderFactory constructs a ReadGroup using the provided configuration and
