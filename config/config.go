@@ -433,6 +433,7 @@ func decodeInstance(path string, inst *cue.Instance) (*Config, error) {
 			return nil, fmt.Errorf("read package name: %w", err)
 		}
 	}
+	pkgPrefix := computePackagePrefix(inst, pkgName)
 	data, err := configVal.MarshalJSON()
 	if err != nil {
 		return nil, fmt.Errorf("encode config to JSON: %w", err)
@@ -442,12 +443,12 @@ func decodeInstance(path string, inst *cue.Instance) (*Config, error) {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
 	normalizeSignalBuffers(&cfg)
-	meta := ModuleReference{File: path, Name: cfg.Name, Description: cfg.Description, Package: pkgName}
+	meta := ModuleReference{File: path, Name: cfg.Name, Description: cfg.Description, Package: pkgPrefix}
 	cfg.setSource(meta)
 	if err := validateSignalBuffers(&cfg); err != nil {
 		return nil, err
 	}
-	qualifyConfig(&cfg, pkgName)
+	qualifyConfig(&cfg, pkgPrefix)
 	if err := validateConfigIdentifiers(&cfg); err != nil {
 		return nil, err
 	}
@@ -653,10 +654,10 @@ func qualifyIdentifier(pkg, id string) string {
 	if trimmed == "" {
 		return trimmed
 	}
-	if pkg == "" || strings.Contains(trimmed, ".") {
+	if pkg == "" || strings.Contains(trimmed, ":") {
 		return trimmed
 	}
-	return pkg + "." + trimmed
+	return pkg + ":" + trimmed
 }
 
 func qualifyReference(pkg, value string) string {
@@ -664,10 +665,10 @@ func qualifyReference(pkg, value string) string {
 	if trimmed == "" {
 		return trimmed
 	}
-	if strings.Contains(trimmed, ".") || pkg == "" {
+	if strings.Contains(trimmed, ":") || pkg == "" {
 		return trimmed
 	}
-	return pkg + "." + trimmed
+	return pkg + ":" + trimmed
 }
 
 func validateConfigIdentifiers(cfg *Config) error {
@@ -707,21 +708,62 @@ func ensureIdentifier(value, kind string) error {
 	if trimmed == "" {
 		return fmt.Errorf("%s identifier must not be empty", kind)
 	}
-	parts := strings.Split(trimmed, ".")
-	for _, part := range parts {
+	if strings.Count(trimmed, ":") != 1 {
+		return fmt.Errorf("%s %q must be qualified as <package>:<local>", kind, trimmed)
+	}
+	parts := strings.SplitN(trimmed, ":", 2)
+	pkgPart := parts[0]
+	local := parts[1]
+	if pkgPart == "" || local == "" {
+		return fmt.Errorf("%s %q must be qualified as <package>:<local>", kind, trimmed)
+	}
+	if err := validateIdentifierSegments(pkgPart, "package segment", kind, trimmed); err != nil {
+		return err
+	}
+	if strings.Contains(local, ":") {
+		return fmt.Errorf("%s %q has an unexpected colon in the local identifier", kind, trimmed)
+	}
+	if err := validateIdentifierSegments(local, "local segment", kind, trimmed); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateIdentifierSegments(value, segmentKind, kind, full string) error {
+	for _, part := range strings.Split(value, ".") {
 		if part == "" {
-			return fmt.Errorf("%s %q contains an empty namespace segment", kind, trimmed)
+			return fmt.Errorf("%s %q contains an empty %s", kind, full, segmentKind)
 		}
 		for idx, r := range part {
 			if idx == 0 && unicode.IsDigit(r) {
-				return fmt.Errorf("%s %q must not start with a digit", kind, trimmed)
+				return fmt.Errorf("%s %q must not start with a digit", kind, full)
 			}
 			if !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_') {
-				return fmt.Errorf("%s %q contains invalid character %q", kind, trimmed, r)
+				return fmt.Errorf("%s %q contains invalid character %q", kind, full, r)
 			}
 		}
 	}
 	return nil
+}
+
+func computePackagePrefix(inst *cue.Instance, explicit string) string {
+	trimmed := strings.TrimSpace(explicit)
+	if trimmed != "" {
+		return trimmed
+	}
+	if inst == nil {
+		return ""
+	}
+	if path := strings.Trim(strings.TrimSpace(inst.ImportPath), "/"); path != "" {
+		replacer := strings.NewReplacer("/", ".", ":", ".")
+		if converted := replacer.Replace(path); strings.TrimSpace(converted) != "" {
+			return strings.Trim(converted, ".")
+		}
+	}
+	if name := strings.TrimSpace(inst.PkgName); name != "" {
+		return name
+	}
+	return ""
 }
 
 func (c *Config) setSource(meta ModuleReference) {

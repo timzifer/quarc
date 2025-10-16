@@ -106,8 +106,8 @@ config: instance.config
 	}
 
 	seenCells := map[string]bool{
-		"overlay.test.target": false,
-		"overlay.test.output": false,
+		"overlay.test:target": false,
+		"overlay.test:output": false,
 	}
 	for _, cell := range cfg.Cells {
 		if _, ok := seenCells[cell.ID]; ok {
@@ -130,14 +130,14 @@ config: instance.config
 	if len(prog.Outputs) != 1 {
 		t.Fatalf("expected 1 output, got %d", len(prog.Outputs))
 	}
-	if prog.Outputs[0].Cell != "overlay.test.output" {
-		t.Fatalf("expected output cell overlay.test.output, got %s", prog.Outputs[0].Cell)
+	if prog.Outputs[0].Cell != "overlay.test:output" {
+		t.Fatalf("expected output cell overlay.test:output, got %s", prog.Outputs[0].Cell)
 	}
 	if len(prog.Inputs) != 1 {
 		t.Fatalf("expected 1 input, got %d", len(prog.Inputs))
 	}
-	if prog.Inputs[0].Cell != "overlay.test.target" {
-		t.Fatalf("expected input cell overlay.test.target, got %s", prog.Inputs[0].Cell)
+	if prog.Inputs[0].Cell != "overlay.test:target" {
+		t.Fatalf("expected input cell overlay.test:target, got %s", prog.Inputs[0].Cell)
 	}
 
 	if rate, ok := prog.Settings["rate"].(float64); !ok || rate != 1.5 {

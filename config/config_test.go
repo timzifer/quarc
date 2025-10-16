@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -85,17 +86,58 @@ config: {
 	if len(cfg.Cells) != 1 {
 		t.Fatalf("expected 1 cell, got %d", len(cfg.Cells))
 	}
-	if cfg.Cells[0].ID != "plant.core.temperature" {
+	if cfg.Cells[0].ID != "plant.core:temperature" {
 		t.Fatalf("expected namespaced cell id, got %q", cfg.Cells[0].ID)
 	}
 	if len(cfg.Reads) != 1 {
 		t.Fatalf("expected 1 read, got %d", len(cfg.Reads))
 	}
-	if cfg.Reads[0].Signals[0].Cell != "plant.core.temperature" {
+	if cfg.Reads[0].Signals[0].Cell != "plant.core:temperature" {
 		t.Fatalf("expected signal to reference namespaced cell, got %q", cfg.Reads[0].Signals[0].Cell)
 	}
 	if cfg.Source.Package != "plant.core" {
 		t.Fatalf("expected source package to be plant.core, got %q", cfg.Source.Package)
+	}
+}
+
+func TestNestedPackageQualification(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.cue")
+
+	content := `package plant
+
+config: {
+    package: "plant.heating.underfloor"
+    cycle: "1s"
+` + baseSections + `
+    cells: [
+        {
+            id: "flow"
+            type: "number"
+        },
+    ]
+    reads: []
+    writes: []
+}
+`
+
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if len(cfg.Cells) != 1 {
+		t.Fatalf("expected 1 cell, got %d", len(cfg.Cells))
+	}
+	if cfg.Cells[0].ID != "plant.heating.underfloor:flow" {
+		t.Fatalf("expected nested package id, got %q", cfg.Cells[0].ID)
+	}
+	if cfg.Source.Package != "plant.heating.underfloor" {
+		t.Fatalf("expected source package to match nested package, got %q", cfg.Source.Package)
 	}
 }
 
@@ -119,7 +161,7 @@ config: {
     writes: [
         {
             id: "publish"
-            cell: "other.package.temperature"
+            cell: "other.package:temperature"
             endpoint: {
                 address: "localhost:502"
                 unit_id: 1
@@ -145,10 +187,10 @@ config: {
 		t.Fatalf("expected 1 write, got %d", len(cfg.Writes))
 	}
 	write := cfg.Writes[0]
-	if write.ID != "plant.core.publish" {
+	if write.ID != "plant.core:publish" {
 		t.Fatalf("expected namespaced write id, got %q", write.ID)
 	}
-	if write.Cell != "other.package.temperature" {
+	if write.Cell != "other.package:temperature" {
 		t.Fatalf("expected qualified reference to remain unchanged, got %q", write.Cell)
 	}
 }
@@ -231,7 +273,7 @@ config: {
 		t.Fatalf("expected 1 cell, got %d", len(cfg.Cells))
 	}
 	cell := cfg.Cells[0]
-	if cell.ID != "templ.app.pressure" {
+	if cell.ID != "templ.app:pressure" {
 		t.Fatalf("expected namespaced id, got %q", cell.ID)
 	}
 	if cell.Unit != "bar" {
@@ -240,7 +282,7 @@ config: {
 	if len(cfg.Reads) != 1 {
 		t.Fatalf("expected 1 read, got %d", len(cfg.Reads))
 	}
-	if cfg.Reads[0].Signals[0].Cell != "templ.app.pressure" {
+	if cfg.Reads[0].Signals[0].Cell != "templ.app:pressure" {
 		t.Fatalf("expected read signal to reference namespaced cell, got %q", cfg.Reads[0].Signals[0].Cell)
 	}
 }
@@ -294,7 +336,7 @@ config: {
 		t.Fatalf("expected 1 cell, got %d", len(cfg.Cells))
 	}
 	cell := cfg.Cells[0]
-	if cell.ID != "overlay.test.virtual" {
+	if cell.ID != "overlay.test:virtual" {
 		t.Fatalf("expected namespaced cell from overlay, got %q", cell.ID)
 	}
 }
@@ -365,7 +407,7 @@ config: config & {
 	if len(cfg.Reads) != 1 {
 		t.Fatalf("expected 1 read, got %d", len(cfg.Reads))
 	}
-	if cfg.Reads[0].Signals[0].Cell != "plant.core.temperature" {
+	if cfg.Reads[0].Signals[0].Cell != "plant.core:temperature" {
 		t.Fatalf("expected read to reference namespaced cell, got %q", cfg.Reads[0].Signals[0].Cell)
 	}
 }
@@ -442,7 +484,7 @@ config: {
 	if len(signal.Aggregations) != 1 {
 		t.Fatalf("expected 1 aggregation, got %d", len(signal.Aggregations))
 	}
-	if agg := signal.Aggregations[0]; agg.Cell != "plant.core.temperature" || agg.Aggregator != "sum" {
+	if agg := signal.Aggregations[0]; agg.Cell != "plant.core:temperature" || agg.Aggregator != "sum" {
 		t.Fatalf("unexpected aggregation config: %#v", agg)
 	}
 	if signal.BufferSize != 8 {
@@ -514,6 +556,46 @@ config: {
 
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected load to fail due to invalid buffer aggregator")
+	}
+}
+
+func TestLoadRejectsIdentifiersWithStrayColons(t *testing.T) {
+	cases := map[string]string{
+		"leading":  ":temperature",
+		"trailing": "temperature:",
+		"multi":    "plant.core:temperature:extra",
+	}
+
+	for name, cellID := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.cue")
+
+			content := fmt.Sprintf(`package plant
+
+config: {
+    package: "plant.core"
+    cycle: "1s"
+%s
+    cells: [
+        {
+            id: "%s"
+            type: "number"
+        },
+    ]
+    reads: []
+    writes: []
+}
+`, baseSections, cellID)
+
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			if _, err := Load(path); err == nil {
+				t.Fatalf("expected load to fail for id %q", cellID)
+			}
+		})
 	}
 }
 
