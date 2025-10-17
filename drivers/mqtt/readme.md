@@ -15,16 +15,18 @@ import (
 svc, err := service.New(
     ctx,
     cfg,
-    service.WithReaderFactory("mqtt", mqttdriver.NewReadFactory()),
-    service.WithWriterFactory("mqtt", mqttdriver.NewWriteFactory()),
+    service.WithDriver("mqtt", service.DriverFactories{
+        Reader: mqttdriver.NewReadFactory(),
+        Writer: mqttdriver.NewWriteFactory(),
+    }),
 )
 ```
 
-Each QUARC read group or write target that references `driver: "mqtt"` must provide a `driver_settings` block that follows the schema documented below.
+Each QUARC read group or write target that references `driver.name: "mqtt"` must provide a `driver.settings` block that follows the schema documented below.
 
 ## Configuration overview
 
-Driver settings are decoded from the `driver_settings` value of each read group or write target. Settings are independent per group/target so that different brokers or credentials can be used side by side.
+Driver settings are decoded from the `driver.settings` value of each read group or write target. Settings are independent per group/target so that different brokers or credentials can be used side by side.
 
 ### Reader settings
 
@@ -121,7 +123,7 @@ When the optional `home_assistant` section is enabled the writer publishes disco
 
 ## Troubleshooting
 
-* Ensure the `driver_settings.connection.broker` URL uses the correct scheme (`tcp`, `ssl`, or `ws`).
+* Ensure the `driver.settings.connection.broker` URL uses the correct scheme (`tcp`, `ssl`, or `ws`).
 * Buffer capacity mismatches between the driver settings and the QUARC signal configuration will cause the factory to fail fast with a descriptive error.
 * Payload conversion errors are logged per message with the offending topic to aid debugging.
 * In Home Assistant mode discovery will only be published once per process; remove the retained discovery topic when experimenting with different metadata.

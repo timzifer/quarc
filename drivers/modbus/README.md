@@ -99,14 +99,17 @@ Use `config.ReadGroupConfig` plus optional driver-specific JSON overrides to des
 ```json
 {
   "id": "switches",
+  "driver": {
+    "name": "modbus",
+    "settings": {
+      "function": "coils",
+      "start": 8,
+      "length": 8
+    }
+  },
   "function": "discrete_inputs",
   "start": 0,
   "length": 16,
-  "driver_settings": {
-    "function": "coils",
-    "start": 8,
-    "length": 8
-  },
   "signals": [
     { "cell": "line.start", "type": "bool", "offset": 0 },
     { "cell": "line.stop",  "type": "bool", "offset": 1 }
@@ -114,7 +117,7 @@ Use `config.ReadGroupConfig` plus optional driver-specific JSON overrides to des
 }
 ```
 
-The JSON within `driver_settings` is decoded by `resolveReadGroup`, letting you override the protocol function, start address, and length without duplicating the full Quarc config. Signal-level options include:
+The JSON within `driver.settings` is decoded by `resolveReadGroup`, letting you override the protocol function, start address, and length without duplicating the full Quarc config. Signal-level options include:
 
 - `offset` – word or bit offset (depending on function type).
 - `bit` – optional bit selection for register-based booleans.
@@ -129,15 +132,18 @@ Write targets mirror read group behaviour with additional controls:
 {
   "id": "setpoint",
   "cell": "zone.temperature_setpoint",
+  "driver": {
+    "name": "modbus",
+    "settings": {
+      "scale": 10,
+      "signed": true,
+      "endianness": "little"
+    }
+  },
   "function": "holding_register",
   "address": 200,
   "deadband": 0.5,
-  "rate_limit": "2s",
-  "driver_settings": {
-    "scale": 10,
-    "signed": true,
-    "endianness": "little"
-  }
+  "rate_limit": "2s"
 }
 ```
 
@@ -156,7 +162,7 @@ import (
 )
 
 myRead: modbus.#Read & {
-    driver_settings: {
+    driver.settings: {
         function: "holding_registers"
         start:    100
         length:   4
@@ -164,7 +170,7 @@ myRead: modbus.#Read & {
 }
 
 myWrite: modbus.#Write & {
-    driver_settings: {
+    driver.settings: {
         function:   "coil"
         address:    10
         endianness: "little"

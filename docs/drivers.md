@@ -14,13 +14,15 @@ Each endpoint in the configuration specifies the driver identifier so the runtim
 
 ## Custom drivers
 
-Custom transports register their reader and writer factories using dedicated identifiers:
+Custom transports register their capabilities once using a shared identifier:
 
 ```go
 svc, err := service.New(cfg, logger,
-        service.WithReaderFactory("my-driver", myReaderFactory),
-        service.WithWriterFactory("my-driver", myWriterFactory),
+        service.WithDriver("my-driver", service.DriverFactories{
+                Reader: myReaderFactory,
+                Writer: myWriterFactory,
+        }),
 )
 ```
 
-Driver modules receive the raw `driver_settings` YAML (CUE) node from the configuration, allowing protocol-specific options to be decoded without changing the core schema.
+Driver modules receive the raw `driver.settings` payload from the configuration, allowing protocol-specific options to be decoded without changing the core schema.

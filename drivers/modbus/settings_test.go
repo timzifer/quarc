@@ -13,11 +13,11 @@ func TestResolveReadGroupAppliesJSONOverrides(t *testing.T) {
 		Function: "holding",
 		Start:    1,
 		Length:   2,
-		DriverSettings: []byte(`{
+		Driver: config.DriverConfig{Name: "modbus", Settings: []byte(`{
                         "function": "input",
                         "start": 16,
                         "length": 32
-                }`),
+                }`)},
 	}
 
 	resolved, err := resolveReadGroup(cfg)
@@ -37,11 +37,11 @@ func TestResolveReadGroupAppliesJSONOverrides(t *testing.T) {
 
 func TestResolveReadGroupInvalidJSON(t *testing.T) {
 	cfg := config.ReadGroupConfig{
-		ID:             "group1",
-		Function:       "holding",
-		Start:          1,
-		Length:         2,
-		DriverSettings: []byte("not-json"),
+		ID:       "group1",
+		Function: "holding",
+		Start:    1,
+		Length:   2,
+		Driver:   config.DriverConfig{Name: "modbus", Settings: []byte("not-json")},
 	}
 
 	if _, err := resolveReadGroup(cfg); err == nil {
@@ -55,7 +55,7 @@ func TestResolveWriteTargetAppliesJSONOverrides(t *testing.T) {
 		Function: "holding",
 		Address:  10,
 		Scale:    1,
-		DriverSettings: []byte(`{
+		Driver: config.DriverConfig{Name: "modbus", Settings: []byte(`{
                         "function": "coil",
                         "address": 42,
                         "endianness": "be",
@@ -63,7 +63,7 @@ func TestResolveWriteTargetAppliesJSONOverrides(t *testing.T) {
                         "deadband": 0.5,
                         "rate_limit": "5s",
                         "scale": 2.5
-                }`),
+                }`)},
 	}
 
 	resolved, err := resolveWriteTarget(cfg)
@@ -95,10 +95,10 @@ func TestResolveWriteTargetAppliesJSONOverrides(t *testing.T) {
 
 func TestResolveWriteTargetInvalidJSON(t *testing.T) {
 	cfg := config.WriteTargetConfig{
-		ID:             "target1",
-		Function:       "holding",
-		Address:        10,
-		DriverSettings: []byte("{"),
+		ID:       "target1",
+		Function: "holding",
+		Address:  10,
+		Driver:   config.DriverConfig{Name: "modbus", Settings: []byte("{")},
 	}
 
 	if _, err := resolveWriteTarget(cfg); err == nil {

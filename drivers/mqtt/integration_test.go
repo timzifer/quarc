@@ -54,9 +54,8 @@ func TestReadGroupReceivesMessages(t *testing.T) {
 		},
 		Reads: []config.ReadGroupConfig{
 			{
-				ID:             "rg1",
-				Endpoint:       config.EndpointConfig{Driver: "mqtt"},
-				DriverSettings: driverSettings,
+				ID:     "rg1",
+				Driver: config.DriverConfig{Name: "mqtt", Settings: driverSettings},
 				Signals: []config.ReadSignalConfig{
 					{Cell: "temperature", Type: config.ValueKindFloat},
 				},
@@ -65,7 +64,7 @@ func TestReadGroupReceivesMessages(t *testing.T) {
 	}
 
 	svc, err := service.New(cfg, zerolog.New(io.Discard),
-		service.WithReaderFactory("mqtt", NewReadFactory()),
+		service.WithDriver("mqtt", service.DriverFactories{Reader: NewReadFactory()}),
 	)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -147,16 +146,15 @@ func TestWriterPublishesCellValue(t *testing.T) {
 		},
 		Writes: []config.WriteTargetConfig{
 			{
-				ID:             "wt1",
-				Cell:           "output",
-				Endpoint:       config.EndpointConfig{Driver: "mqtt"},
-				DriverSettings: driverSettings,
+				ID:     "wt1",
+				Cell:   "output",
+				Driver: config.DriverConfig{Name: "mqtt", Settings: driverSettings},
 			},
 		},
 	}
 
 	svc, err := service.New(cfg, zerolog.New(io.Discard),
-		service.WithWriterFactory("mqtt", NewWriteFactory()),
+		service.WithDriver("mqtt", service.DriverFactories{Writer: NewWriteFactory()}),
 	)
 	if err != nil {
 		t.Fatalf("new service: %v", err)

@@ -412,7 +412,8 @@ func TestDeterministicCycle(t *testing.T) {
 		Reads: []config.ReadGroupConfig{
 			{
 				ID:       "temperature",
-				Endpoint: config.EndpointConfig{Address: "ignored:502", UnitID: 1, Driver: testDriverName},
+				Driver:   config.DriverConfig{Name: testDriverName},
+				Endpoint: config.EndpointConfig{Address: "ignored:502", UnitID: 1},
 				Function: "holding",
 				Start:    0,
 				Length:   1,
@@ -444,7 +445,8 @@ func TestDeterministicCycle(t *testing.T) {
 			{
 				ID:       "write_alarm",
 				Cell:     "alarm",
-				Endpoint: config.EndpointConfig{Address: "ignored:502", UnitID: 1, Driver: testDriverName},
+				Driver:   config.DriverConfig{Name: testDriverName},
+				Endpoint: config.EndpointConfig{Address: "ignored:502", UnitID: 1},
 				Function: "coil",
 				Address:  10,
 			},
@@ -717,7 +719,8 @@ func TestServiceClosesRemoteClients(t *testing.T) {
 		},
 		Reads: []config.ReadGroupConfig{{
 			ID:       "rg",
-			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
+			Driver:   config.DriverConfig{Name: testDriverName},
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1},
 			Function: "holding",
 			Start:    0,
 			Length:   1,
@@ -735,7 +738,8 @@ func TestServiceClosesRemoteClients(t *testing.T) {
 		Writes: []config.WriteTargetConfig{{
 			ID:       "wt",
 			Cell:     "output",
-			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
+			Driver:   config.DriverConfig{Name: testDriverName},
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1},
 			Function: "coil",
 			Address:  0,
 		}},
@@ -784,7 +788,8 @@ func TestServiceBufferStatusAndTelemetry(t *testing.T) {
 		Cells: []config.CellConfig{{ID: "input", Type: config.ValueKindNumber}},
 		Reads: []config.ReadGroupConfig{{
 			ID:       "rg",
-			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
+			Driver:   config.DriverConfig{Name: testDriverName},
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1},
 			Function: "holding",
 			Start:    0,
 			Length:   1,
@@ -888,7 +893,8 @@ func TestServiceFlushBufferPhaseAppliesAggregations(t *testing.T) {
 		},
 		Reads: []config.ReadGroupConfig{{
 			ID:       "rg",
-			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
+			Driver:   config.DriverConfig{Name: testDriverName},
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1},
 			Function: "holding",
 			Start:    0,
 			Length:   1,
@@ -973,7 +979,8 @@ func TestServiceFlushBufferPhaseHandlesOverflowPolicies(t *testing.T) {
 		},
 		Reads: []config.ReadGroupConfig{{
 			ID:       "rg",
-			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
+			Driver:   config.DriverConfig{Name: testDriverName},
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1},
 			Function: "holding",
 			Start:    0,
 			Length:   1,
@@ -1063,7 +1070,8 @@ func TestServiceFlushBufferPhaseAggregationErrorsMarkCellsInvalid(t *testing.T) 
 		},
 		Reads: []config.ReadGroupConfig{{
 			ID:       "rg",
-			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
+			Driver:   config.DriverConfig{Name: testDriverName},
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1},
 			Function: "holding",
 			Start:    0,
 			Length:   1,
@@ -1324,10 +1332,9 @@ func TestServiceSharedConnections(t *testing.T) {
 		Cycle: config.Duration{Duration: time.Millisecond},
 		Connections: []config.IOConnectionConfig{{
 			ID:     "stub_bus",
-			Driver: testDriverName,
+			Driver: config.DriverConfig{Name: testDriverName},
 			Endpoint: config.EndpointConfig{
 				Address: "ignored:1",
-				Driver:  testDriverName,
 			},
 		}},
 		Cells: []config.CellConfig{
@@ -1337,7 +1344,7 @@ func TestServiceSharedConnections(t *testing.T) {
 		Reads: []config.ReadGroupConfig{{
 			ID:         "rg",
 			Connection: "stub_bus",
-			Endpoint:   config.EndpointConfig{Driver: testDriverName},
+			Driver:     config.DriverConfig{Name: testDriverName},
 			Function:   "holding",
 			Start:      0,
 			Length:     1,
@@ -1351,7 +1358,7 @@ func TestServiceSharedConnections(t *testing.T) {
 			ID:         "wt",
 			Cell:       "output",
 			Connection: "stub_bus",
-			Endpoint:   config.EndpointConfig{Driver: testDriverName},
+			Driver:     config.DriverConfig{Name: testDriverName},
 			Function:   "coil",
 			Address:    0,
 		}},

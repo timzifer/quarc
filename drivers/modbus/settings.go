@@ -25,9 +25,9 @@ type writeTargetOverrides struct {
 
 func resolveReadGroup(cfg config.ReadGroupConfig) (config.ReadGroupConfig, error) {
 	resolved := cfg
-	if len(cfg.DriverSettings) > 0 {
+	if len(cfg.Driver.Settings) > 0 {
 		var overrides readGroupOverrides
-		if err := decodeDriverSettings(cfg.DriverSettings, &overrides); err != nil {
+		if err := decodeDriverSettings(cfg.Driver.Settings, &overrides); err != nil {
 			return config.ReadGroupConfig{}, fmt.Errorf("read group %s: decode driver settings: %w", cfg.ID, err)
 		}
 		if overrides.Function != "" {
@@ -45,9 +45,9 @@ func resolveReadGroup(cfg config.ReadGroupConfig) (config.ReadGroupConfig, error
 
 func resolveWriteTarget(cfg config.WriteTargetConfig) (config.WriteTargetConfig, error) {
 	resolved := cfg
-	if len(cfg.DriverSettings) > 0 {
+	if len(cfg.Driver.Settings) > 0 {
 		var overrides writeTargetOverrides
-		if err := decodeDriverSettings(cfg.DriverSettings, &overrides); err != nil {
+		if err := decodeDriverSettings(cfg.Driver.Settings, &overrides); err != nil {
 			return config.WriteTargetConfig{}, fmt.Errorf("write target %s: decode driver settings: %w", cfg.ID, err)
 		}
 		if overrides.Function != "" {
