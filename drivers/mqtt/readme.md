@@ -1,14 +1,14 @@
 # QUARC MQTT Driver
 
-This module provides reader and writer factories that plug into the [QUARC](https://github.com/timzifer/quarc) runtime. The driver keeps the QUARC core free from MQTT dependencies while supporting rich configuration options, buffered signal ingestion, and Home Assistant discovery.
+This module provides reader and writer factories that plug into the [QUARC](https://github.com/timzifer/quarc) runtime. The driver keeps the QUARC core free from MQTT dependencies while supporting rich configuration options, buffered signal ingestion, and Home Assistant discovery. It now ships directly inside the main `github.com/timzifer/quarc` module alongside the runtime.
 
 ## Registration
 
-Add the driver factories when constructing a `service.Service` instance. Both factories live in the root package of this repository.
+Add the driver factories when constructing a `service.Service` instance. Both factories live in the primary Quarc module.
 
 ```go
 import (
-    mqttdriver "github.com/quarc-labs/quarc_driver_mqtt"
+    "github.com/timzifer/quarc/drivers/mqtt"
     "github.com/timzifer/quarc/service"
 )
 
@@ -16,8 +16,8 @@ svc, err := service.New(
     ctx,
     cfg,
     service.WithDriver("mqtt", service.DriverFactories{
-        Reader: mqttdriver.NewReadFactory(),
-        Writer: mqttdriver.NewWriteFactory(),
+        Reader: mqtt.NewReadFactory(),
+        Writer: mqtt.NewWriteFactory(),
     }),
 )
 ```

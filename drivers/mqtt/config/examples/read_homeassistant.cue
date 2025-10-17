@@ -1,6 +1,6 @@
 package examples
 
-import "github.com/quarc-labs/quarc_driver_mqtt/config/mqtt_driver"
+import "github.com/timzifer/quarc/drivers/mqtt/config/mqtt_driver"
 
 // Example QUARC read group exposing a cell to Home Assistant.
 read_group: {
