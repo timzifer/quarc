@@ -845,6 +845,14 @@ func TestApplyConnectionDefaults(t *testing.T) {
 	if cfg.Connections[0].Driver.Name != "stub" {
 		t.Fatalf("expected connection driver to be normalised, got %q", cfg.Connections[0].Driver.Name)
 	}
+	if string(cfg.Connections[0].Specification) != string(sharedSettings) {
+		t.Fatalf("expected connection specification to mirror driver settings")
+	}
+	if len(cfg.Connections[0].Specification) > 0 && len(cfg.Connections[0].Driver.Settings) > 0 {
+		if &cfg.Connections[0].Specification[0] == &cfg.Connections[0].Driver.Settings[0] {
+			t.Fatalf("expected connection specification to be cloned, not shared")
+		}
+	}
 
 	if cfg.Reads[0].Endpoint.Address != "127.0.0.1:502" {
 		t.Fatalf("expected read defaults to apply, got %+v", cfg.Reads[0].Endpoint)
@@ -863,6 +871,14 @@ func TestApplyConnectionDefaults(t *testing.T) {
 			t.Fatalf("expected driver settings to be cloned, not shared")
 		}
 	}
+	if string(cfg.Reads[0].Specification) != string(cfg.Connections[0].Specification) {
+		t.Fatalf("expected read specification to inherit")
+	}
+	if len(cfg.Reads[0].Specification) > 0 && len(cfg.Connections[0].Specification) > 0 {
+		if &cfg.Reads[0].Specification[0] == &cfg.Connections[0].Specification[0] {
+			t.Fatalf("expected read specification to be cloned")
+		}
+	}
 
 	if cfg.Reads[1].Endpoint.Address != "192.0.2.10:1502" {
 		t.Fatalf("expected read override address to be preserved, got %q", cfg.Reads[1].Endpoint.Address)
@@ -870,12 +886,18 @@ func TestApplyConnectionDefaults(t *testing.T) {
 	if cfg.Reads[1].Driver.Name != "stub" {
 		t.Fatalf("expected read override driver to match connection, got %q", cfg.Reads[1].Driver.Name)
 	}
+	if len(cfg.Reads[1].Specification) == 0 {
+		t.Fatalf("expected read override specification to inherit")
+	}
 
 	if cfg.Reads[2].Endpoint.Address != "192.0.2.20:1502" {
 		t.Fatalf("expected inline endpoint to remain unchanged, got %q", cfg.Reads[2].Endpoint.Address)
 	}
 	if cfg.Reads[2].Driver.Name != "stub" {
 		t.Fatalf("expected inline read driver to remain, got %q", cfg.Reads[2].Driver.Name)
+	}
+	if len(cfg.Reads[2].Specification) != 0 {
+		t.Fatalf("expected inline read specification to remain empty")
 	}
 
 	if cfg.Writes[0].Endpoint.Address != "127.0.0.1:502" {
@@ -892,8 +914,19 @@ func TestApplyConnectionDefaults(t *testing.T) {
 			t.Fatalf("expected write driver settings to be cloned")
 		}
 	}
+	if len(cfg.Writes[0].Specification) == 0 {
+		t.Fatalf("expected write specification to inherit")
+	}
+	if len(cfg.Writes[0].Specification) > 0 && len(cfg.Connections[0].Specification) > 0 {
+		if &cfg.Writes[0].Specification[0] == &cfg.Connections[0].Specification[0] {
+			t.Fatalf("expected write specification to be cloned")
+		}
+	}
 	if string(cfg.Writes[1].Driver.Settings) != `{"local":true}` {
 		t.Fatalf("expected write-specific driver settings to remain, got %s", string(cfg.Writes[1].Driver.Settings))
+	}
+	if string(cfg.Writes[1].Specification) != `{"local":true}` {
+		t.Fatalf("expected write-specific specification to remain, got %s", string(cfg.Writes[1].Specification))
 	}
 }
 

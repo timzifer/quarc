@@ -43,6 +43,37 @@ func TestResolveReadGroupAppliesJSONOverrides(t *testing.T) {
 	}
 }
 
+func TestResolveReadGroupAppliesSpecificationOverrides(t *testing.T) {
+	cfg := config.ReadGroupConfig{
+		ID:            "group1",
+		Specification: []byte(`{"function":"input","start":16,"length":32,"max_gap_size":4}`),
+		Driver:        config.DriverConfig{Name: "modbus"},
+	}
+
+	resolved, plan, err := resolveReadGroup(cfg)
+	if err != nil {
+		t.Fatalf("resolveReadGroup: %v", err)
+	}
+	if plan.Function != "input" {
+		t.Fatalf("unexpected function: got %q want %q", plan.Function, "input")
+	}
+	if plan.Start != 16 {
+		t.Fatalf("unexpected start: got %d want %d", plan.Start, 16)
+	}
+	if plan.Length != 32 {
+		t.Fatalf("unexpected length: got %d want %d", plan.Length, 32)
+	}
+	if plan.MaxGapSize != 4 {
+		t.Fatalf("unexpected max gap size: got %d want %d", plan.MaxGapSize, 4)
+	}
+	if plan.Legacy {
+		t.Fatal("expected plan to be marked non-legacy")
+	}
+	if len(resolved.DriverMetadata) == 0 {
+		t.Fatal("expected driver metadata to be populated")
+	}
+}
+
 func TestResolveReadGroupInvalidJSON(t *testing.T) {
 	cfg := config.ReadGroupConfig{
 		ID:     "group1",
@@ -51,6 +82,14 @@ func TestResolveReadGroupInvalidJSON(t *testing.T) {
 
 	if _, _, err := resolveReadGroup(cfg); err == nil {
 		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestResolveReadGroupInvalidSpecification(t *testing.T) {
+	cfg := config.ReadGroupConfig{ID: "group1", Specification: []byte("not-json")}
+
+	if _, _, err := resolveReadGroup(cfg); err == nil {
+		t.Fatal("expected error for invalid specification JSON")
 	}
 }
 
@@ -158,6 +197,41 @@ func TestResolveWriteTargetAppliesJSONOverrides(t *testing.T) {
 	}
 }
 
+func TestResolveWriteTargetAppliesSpecificationOverrides(t *testing.T) {
+	cfg := config.WriteTargetConfig{
+		ID:            "target1",
+		Function:      "holding",
+		Address:       10,
+		Specification: []byte(`{"function":"coil","address":42,"endianness":"be","signed":true,"deadband":0.5,"rate_limit":"5s","scale":2.5}`),
+	}
+
+	resolved, err := resolveWriteTarget(cfg)
+	if err != nil {
+		t.Fatalf("resolveWriteTarget: %v", err)
+	}
+	if resolved.Function != "coil" {
+		t.Fatalf("unexpected function: got %q want %q", resolved.Function, "coil")
+	}
+	if resolved.Address != 42 {
+		t.Fatalf("unexpected address: got %d want %d", resolved.Address, 42)
+	}
+	if resolved.Endianness != "be" {
+		t.Fatalf("unexpected endianness: got %q want %q", resolved.Endianness, "be")
+	}
+	if !resolved.Signed {
+		t.Fatal("expected signed override to be true")
+	}
+	if resolved.Deadband != 0.5 {
+		t.Fatalf("unexpected deadband: got %v want %v", resolved.Deadband, 0.5)
+	}
+	if resolved.RateLimit.Duration != 5*time.Second {
+		t.Fatalf("unexpected rate limit: got %s want %s", resolved.RateLimit.Duration, 5*time.Second)
+	}
+	if resolved.Scale != 2.5 {
+		t.Fatalf("unexpected scale: got %v want %v", resolved.Scale, 2.5)
+	}
+}
+
 func TestResolveWriteTargetInvalidJSON(t *testing.T) {
 	cfg := config.WriteTargetConfig{
 		ID:       "target1",
@@ -168,5 +242,13 @@ func TestResolveWriteTargetInvalidJSON(t *testing.T) {
 
 	if _, err := resolveWriteTarget(cfg); err == nil {
 		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestResolveWriteTargetInvalidSpecification(t *testing.T) {
+	cfg := config.WriteTargetConfig{ID: "target1", Specification: []byte("{")}
+
+	if _, err := resolveWriteTarget(cfg); err == nil {
+		t.Fatal("expected error for invalid specification JSON")
 	}
 }
