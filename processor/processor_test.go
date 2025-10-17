@@ -10,8 +10,11 @@ import (
 
 	"cuelang.org/go/cue/load"
 
+	"github.com/rs/zerolog"
 	"github.com/timzifer/quarc/config"
 	"github.com/timzifer/quarc/programs"
+	"github.com/timzifer/quarc/runtime/connections"
+	"github.com/timzifer/quarc/service"
 	"github.com/timzifer/quarc/serviceio"
 )
 
@@ -31,6 +34,14 @@ func stubReaderFactory(config.ReadGroupConfig, serviceio.ReaderDependencies) (se
 
 func stubWriterFactory(config.WriteTargetConfig, serviceio.WriterDependencies) (serviceio.Writer, error) {
 	return nil, nil
+}
+
+type stubConnectionHandle struct{}
+
+func (stubConnectionHandle) Close() error { return nil }
+
+func stubConnectionFactory(config.IOConnectionConfig) (connections.Handle, error) {
+	return stubConnectionHandle{}, nil
 }
 
 func TestWithProgramRegistersOverlaysBeforeLoad(t *testing.T) {
@@ -167,8 +178,8 @@ func TestBuildServiceOptions(t *testing.T) {
 		{Driver: "", Reader: stubReaderFactory, Writer: stubWriterFactory},
 	}
 	opts := buildServiceOptions(defs)
-	if len(opts) != 4 {
-		t.Fatalf("expected 4 service options, got %d", len(opts))
+	if len(opts) != 3 {
+		t.Fatalf("expected 3 service options, got %d", len(opts))
 	}
 	for idx, opt := range opts {
 		if opt == nil {
@@ -178,6 +189,35 @@ func TestBuildServiceOptions(t *testing.T) {
 	if buildServiceOptions(nil) != nil {
 		t.Fatal("expected nil result for empty definitions")
 	}
+}
+
+func TestBuildServiceOptionsRegistersConnectionFactory(t *testing.T) {
+	defs := []IOServiceDefinition{{Driver: "delta", Connection: stubConnectionFactory}}
+	opts := buildServiceOptions(defs)
+	if len(opts) != 1 {
+		t.Fatalf("expected 1 service option, got %d", len(opts))
+	}
+
+	cfg := &config.Config{
+		Cycle:     config.Duration{Duration: time.Second},
+		Logging:   config.LoggingConfig{Level: "info"},
+		Telemetry: config.TelemetryConfig{},
+		Policies:  config.GlobalPolicies{},
+		Cells:     []config.CellConfig{{ID: "test.cell", Type: config.ValueKindNumber}},
+		Connections: []config.IOConnectionConfig{{
+			ID:       "shared",
+			Driver:   config.DriverConfig{Name: "delta"},
+			Endpoint: config.EndpointConfig{Address: "127.0.0.1:502", UnitID: 1},
+		}},
+	}
+
+	svc, err := service.New(cfg, zerolog.Nop(), opts...)
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = svc.Close()
+	})
 }
 
 func TestListenAddress(t *testing.T) {
