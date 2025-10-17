@@ -550,7 +550,11 @@ func decodeInstance(path string, inst *cue.Instance, buildInst *build.Instance) 
 	}
 	pkgPrefix := firstNonEmpty(strings.TrimSpace(explicitPackage), rootNamespace, fallbackNamespace)
 
-	data, err := configVal.MarshalJSON()
+	sanitized, err := fillLegacyFieldDefaults(configVal)
+	if err != nil {
+		return nil, fmt.Errorf("prepare legacy fields: %w", err)
+	}
+	data, err := sanitized.MarshalJSON()
 	if err != nil {
 		return nil, fmt.Errorf("encode config to JSON: %w", err)
 	}
@@ -607,6 +611,7 @@ func decodeInstance(path string, inst *cue.Instance, buildInst *build.Instance) 
 		return nil, err
 	}
 	qualifyConfig(&cfg, pkgPrefix)
+	applyLegacyDriverDefaults(&cfg)
 	if err := applyConnectionDefaults(&cfg); err != nil {
 		return nil, err
 	}
@@ -614,6 +619,92 @@ func decodeInstance(path string, inst *cue.Instance, buildInst *build.Instance) 
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+func fillLegacyFieldDefaults(val cue.Value) (cue.Value, error) {
+	ensure := func(v cue.Value, path cue.Path, fallback interface{}) (cue.Value, error) {
+		field := v.LookupPath(path)
+		if !field.Exists() || field.IsConcrete() {
+			return v, nil
+		}
+		v = v.FillPath(path, fallback)
+		if err := v.Err(); err != nil {
+			return v, err
+		}
+		return v, nil
+	}
+
+	reads := val.LookupPath(cue.MakePath(cue.Str("reads")))
+	if iter, err := reads.List(); err == nil {
+		idx := 0
+		for iter.Next() {
+			if val, err = ensure(val, cue.MakePath(cue.Str("reads"), cue.Index(idx), cue.Str("function")), ""); err != nil {
+				return val, err
+			}
+			if val, err = ensure(val, cue.MakePath(cue.Str("reads"), cue.Index(idx), cue.Str("start")), 0); err != nil {
+				return val, err
+			}
+			if val, err = ensure(val, cue.MakePath(cue.Str("reads"), cue.Index(idx), cue.Str("length")), 0); err != nil {
+				return val, err
+			}
+			idx++
+		}
+	}
+
+	writes := val.LookupPath(cue.MakePath(cue.Str("writes")))
+	if iter, err := writes.List(); err == nil {
+		idx := 0
+		for iter.Next() {
+			if val, err = ensure(val, cue.MakePath(cue.Str("writes"), cue.Index(idx), cue.Str("function")), ""); err != nil {
+				return val, err
+			}
+			idx++
+		}
+	}
+
+	return val, nil
+}
+
+func applyLegacyDriverDefaults(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+
+	const legacyDriver = "modbus"
+
+	for i := range cfg.Reads {
+		read := &cfg.Reads[i]
+		if strings.TrimSpace(read.Driver.Name) != "" || strings.TrimSpace(read.Connection) != "" {
+			continue
+		}
+		if function := strings.TrimSpace(read.LegacyFunction); function != "" {
+			settings := map[string]interface{}{"function": function}
+			if read.LegacyStart != nil {
+				settings["start"] = *read.LegacyStart
+			}
+			if read.LegacyLength != nil {
+				settings["length"] = *read.LegacyLength
+			}
+			if encoded, err := json.Marshal(settings); err == nil {
+				read.Driver.Settings = encoded
+			}
+			read.Driver.Name = legacyDriver
+		}
+	}
+
+	for i := range cfg.Writes {
+		write := &cfg.Writes[i]
+		if strings.TrimSpace(write.Driver.Name) != "" || strings.TrimSpace(write.Connection) != "" {
+			continue
+		}
+		if function := strings.TrimSpace(write.Function); function != "" {
+			settings := map[string]interface{}{"function": function}
+			if encoded, err := json.Marshal(settings); err == nil {
+				write.Driver.Settings = encoded
+			}
+			write.Driver.Name = legacyDriver
+		}
+	}
 }
 
 // CycleInterval returns the configured controller cycle duration.
