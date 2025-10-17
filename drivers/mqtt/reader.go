@@ -25,12 +25,12 @@ func NewReadFactory() readers.ReaderFactory {
 		if deps.Cells == nil {
 			return nil, fmt.Errorf("read group %s: missing cell store dependency", cfg.ID)
 		}
-		if cfg.DriverSettings == nil {
-			return nil, fmt.Errorf("read group %s: driver_settings missing", cfg.ID)
+		if len(cfg.Driver.Settings) == 0 {
+			return nil, fmt.Errorf("read group %s: driver settings missing", cfg.ID)
 		}
 		var settings ReadSettings
-		if err := json.Unmarshal(cfg.DriverSettings, &settings); err != nil {
-			return nil, fmt.Errorf("read group %s: decode driver_settings: %w", cfg.ID, err)
+		if err := json.Unmarshal(cfg.Driver.Settings, &settings); err != nil {
+			return nil, fmt.Errorf("read group %s: decode driver settings: %w", cfg.ID, err)
 		}
 		if err := settings.Validate(cfg.Connection == ""); err != nil {
 			return nil, fmt.Errorf("read group %s: %w", cfg.ID, err)

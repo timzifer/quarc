@@ -121,7 +121,9 @@ config: {
     connections: [
         {
             id: "field_sensors"
-            driver: "modbus"
+            driver: {
+                name: "modbus"
+            }
             endpoint: {
                 address: "192.168.10.10:502"
                 unit_id: 1
@@ -130,7 +132,9 @@ config: {
         },
         {
             id: "heater_bus"
-            driver: "modbus"
+            driver: {
+                name: "modbus"
+            }
             endpoint: {
                 address: "192.168.10.20:502"
                 unit_id: 1

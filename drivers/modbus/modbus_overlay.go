@@ -9,12 +9,18 @@ const modbusOverlayContent = `package modbus
 import module "quarc.dev/quarc/module"
 
 #Read: module.#Read & {
-    driver_settings?: #ReadDriverSettings
+    driver?: {
+        settings?: #ReadDriverSettings
+        ...
+    }
     ...
 }
 
 #Write: module.#Write & {
-    driver_settings?: #WriteDriverSettings
+    driver?: {
+        settings?: #WriteDriverSettings
+        ...
+    }
     ...
 }
 

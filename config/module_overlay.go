@@ -79,7 +79,11 @@ const moduleOverlayContent = `package module
     signals: [...#ReadSignal]
     disable?: bool
     can?: _
-    driver_settings?: _
+    driver?: {
+        name?: string
+        settings?: _
+        ...
+    }
     metadata?: _
     ...
 }

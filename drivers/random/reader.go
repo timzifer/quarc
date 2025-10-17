@@ -16,7 +16,7 @@ import (
 )
 
 // NewReadFactory returns a readers.ReaderFactory that produces random values within
-// configurable ranges. The factory consumes the read group's driver_settings node
+// configurable ranges. The factory consumes the read group's driver.settings node
 // to determine the random source and per-signal bounds.
 func NewReadFactory() readers.ReaderFactory {
 	return func(cfg config.ReadGroupConfig, deps readers.ReaderDependencies) (readers.ReadGroup, error) {
@@ -37,7 +37,7 @@ func NewReadFactory() readers.ReaderFactory {
 		if deps.Cells == nil {
 			return nil, fmt.Errorf("read group %s: dependencies missing cell store", cfg.ID)
 		}
-		settings, err := parseSettings(cfg.DriverSettings)
+		settings, err := parseSettings(cfg.Driver.Settings)
 		if err != nil {
 			return nil, fmt.Errorf("read group %s: %w", cfg.ID, err)
 		}

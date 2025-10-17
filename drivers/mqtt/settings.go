@@ -59,7 +59,7 @@ type PayloadConversion struct {
 	Properties map[string]string `json:"properties,omitempty"`
 }
 
-// ReadSettings encapsulates driver_settings for a read group.
+// ReadSettings encapsulates driver.settings for a read group.
 type ReadSettings struct {
 	Connection     ConnectionSettings  `json:"connection"`
 	DefaultQoS     *byte               `json:"default_qos,omitempty"`
@@ -104,7 +104,7 @@ type RateLimit struct {
 	MinInterval config.Duration `json:"min_interval,omitempty"`
 }
 
-// WriteSettings encapsulates driver_settings for a write target.
+// WriteSettings encapsulates driver.settings for a write target.
 type WriteSettings struct {
 	Connection    ConnectionSettings    `json:"connection"`
 	Topic         string                `json:"topic"`
