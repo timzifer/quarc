@@ -33,7 +33,7 @@ const moduleOverlayContent = `package module
     programs?: [...#Program]
     cells?: [...#Cell]
     reads?: [...#Read]
-    writes?: [..._]
+    writes?: [...#Write]
     logic?: [..._]
     ...
 }
@@ -76,9 +76,10 @@ const moduleOverlayContent = `package module
     signals: [...#ReadSignal]
     disable?: bool
     can?: _
+    specification?: _
     driver?: {
         name?: string
-        settings?: _
+        settings?: specification
         ...
     }
     metadata?: _
@@ -87,6 +88,31 @@ const moduleOverlayContent = `package module
     function?: string
     start?: int
     length?: int
+    ...
+}
+
+#Write: {
+    id: string
+    cell: string
+    connection?: string
+    endpoint: _
+    priority?: int
+    disable?: bool
+    specification?: _
+    driver?: {
+        name?: string
+        settings?: specification
+        ...
+    }
+    metadata?: _
+    // Deprecated fields retained for backward compatibility.
+    function?: string
+    address?: int
+    endianness?: string
+    signed?: bool
+    deadband?: number
+    rate_limit?: string
+    scale?: number
     ...
 }
 

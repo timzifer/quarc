@@ -114,11 +114,33 @@ func (d *DriverConfig) Normalize() {
 // Clone returns a deep copy of the driver configuration.
 func (d DriverConfig) Clone() DriverConfig {
 	cloned := DriverConfig{Name: strings.TrimSpace(d.Name)}
-	if len(d.Settings) > 0 {
-		cloned.Settings = make(json.RawMessage, len(d.Settings))
-		copy(cloned.Settings, d.Settings)
-	}
+	cloned.Settings = cloneRawMessage(d.Settings)
 	return cloned
+}
+
+func cloneRawMessage(data json.RawMessage) json.RawMessage {
+	if len(data) == 0 {
+		return nil
+	}
+	cloned := make(json.RawMessage, len(data))
+	copy(cloned, data)
+	return cloned
+}
+
+func reconcileSpecification(spec *json.RawMessage, legacy *json.RawMessage) {
+	if spec == nil || legacy == nil {
+		return
+	}
+	switch {
+	case len(*spec) > 0:
+		cloned := cloneRawMessage(*spec)
+		*spec = cloned
+		*legacy = cloneRawMessage(cloned)
+	case len(*legacy) > 0:
+		cloned := cloneRawMessage(*legacy)
+		*spec = cloned
+		*legacy = cloneRawMessage(cloned)
+	}
 }
 
 // UnmarshalJSON supports decoding both string and object representations for compatibility.
@@ -149,12 +171,7 @@ func (d *DriverConfig) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	d.Name = strings.TrimSpace(aux.Name)
-	if len(aux.Settings) > 0 {
-		d.Settings = make(json.RawMessage, len(aux.Settings))
-		copy(d.Settings, aux.Settings)
-	} else {
-		d.Settings = nil
-	}
+	d.Settings = cloneRawMessage(aux.Settings)
 	return nil
 }
 
@@ -180,11 +197,12 @@ type ConnectionPoolingHints struct {
 
 // IOConnectionConfig describes a reusable transport connection shared between reads and writes.
 type IOConnectionConfig struct {
-	ID       string                 `json:"id"`
-	Driver   DriverConfig           `json:"driver"`
-	Endpoint EndpointConfig         `json:"endpoint"`
-	Pooling  ConnectionPoolingHints `json:"pooling,omitempty"`
-	Source   ModuleReference        `json:"-"`
+	ID            string                 `json:"id"`
+	Specification json.RawMessage        `json:"specification,omitempty"`
+	Driver        DriverConfig           `json:"driver"`
+	Endpoint      EndpointConfig         `json:"endpoint"`
+	Pooling       ConnectionPoolingHints `json:"pooling,omitempty"`
+	Source        ModuleReference        `json:"-"`
 }
 
 // ModuleReference captures metadata about the configuration source that defined an entry.
@@ -241,15 +259,16 @@ type ReadSignalAggregationConfig struct {
 
 // ReadGroupConfig describes a block read.
 type ReadGroupConfig struct {
-	ID         string              `json:"id"`
-	Connection string              `json:"connection,omitempty"`
-	Endpoint   EndpointConfig      `json:"endpoint"`
-	TTL        Duration            `json:"ttl"`
-	Signals    []ReadSignalConfig  `json:"signals"`
-	Disable    bool                `json:"disable,omitempty"`
-	CAN        *CANReadGroupConfig `json:"can,omitempty"`
-	Driver     DriverConfig        `json:"driver"`
-	Metadata   json.RawMessage     `json:"metadata,omitempty"`
+	ID            string              `json:"id"`
+	Connection    string              `json:"connection,omitempty"`
+	Endpoint      EndpointConfig      `json:"endpoint"`
+	TTL           Duration            `json:"ttl"`
+	Signals       []ReadSignalConfig  `json:"signals"`
+	Disable       bool                `json:"disable,omitempty"`
+	CAN           *CANReadGroupConfig `json:"can,omitempty"`
+	Specification json.RawMessage     `json:"specification,omitempty"`
+	Driver        DriverConfig        `json:"driver"`
+	Metadata      json.RawMessage     `json:"metadata,omitempty"`
 	// DriverMetadata carries driver-specific planning hints captured at load time.
 	DriverMetadata json.RawMessage `json:"driver_metadata,omitempty"`
 	// Deprecated: Function is retained for backward compatibility with legacy configurations.
@@ -291,21 +310,22 @@ type CANSignalBindingConfig struct {
 
 // WriteTargetConfig describes how a cell is pushed to Modbus.
 type WriteTargetConfig struct {
-	ID         string          `json:"id"`
-	Cell       string          `json:"cell"`
-	Connection string          `json:"connection,omitempty"`
-	Endpoint   EndpointConfig  `json:"endpoint"`
-	Function   string          `json:"function"`
-	Address    uint16          `json:"address"`
-	Scale      float64         `json:"scale,omitempty"`
-	Endianness string          `json:"endianness,omitempty"`
-	Signed     bool            `json:"signed,omitempty"`
-	Deadband   float64         `json:"deadband,omitempty"`
-	RateLimit  Duration        `json:"rate_limit,omitempty"`
-	Priority   int             `json:"priority,omitempty"`
-	Disable    bool            `json:"disable,omitempty"`
-	Driver     DriverConfig    `json:"driver"`
-	Source     ModuleReference `json:"-"`
+	ID            string          `json:"id"`
+	Cell          string          `json:"cell"`
+	Connection    string          `json:"connection,omitempty"`
+	Endpoint      EndpointConfig  `json:"endpoint"`
+	Function      string          `json:"function"`
+	Address       uint16          `json:"address"`
+	Scale         float64         `json:"scale,omitempty"`
+	Endianness    string          `json:"endianness,omitempty"`
+	Signed        bool            `json:"signed,omitempty"`
+	Deadband      float64         `json:"deadband,omitempty"`
+	RateLimit     Duration        `json:"rate_limit,omitempty"`
+	Priority      int             `json:"priority,omitempty"`
+	Disable       bool            `json:"disable,omitempty"`
+	Specification json.RawMessage `json:"specification,omitempty"`
+	Driver        DriverConfig    `json:"driver"`
+	Source        ModuleReference `json:"-"`
 }
 
 // ProgramSignalConfig maps a program signal onto a cell.
@@ -686,7 +706,9 @@ func applyLegacyDriverDefaults(cfg *Config) {
 				settings["length"] = *read.LegacyLength
 			}
 			if encoded, err := json.Marshal(settings); err == nil {
-				read.Driver.Settings = encoded
+				raw := json.RawMessage(encoded)
+				read.Specification = cloneRawMessage(raw)
+				read.Driver.Settings = cloneRawMessage(raw)
 			}
 			read.Driver.Name = legacyDriver
 		}
@@ -700,7 +722,9 @@ func applyLegacyDriverDefaults(cfg *Config) {
 		if function := strings.TrimSpace(write.Function); function != "" {
 			settings := map[string]interface{}{"function": function}
 			if encoded, err := json.Marshal(settings); err == nil {
-				write.Driver.Settings = encoded
+				raw := json.RawMessage(encoded)
+				write.Specification = cloneRawMessage(raw)
+				write.Driver.Settings = cloneRawMessage(raw)
 			}
 			write.Driver.Name = legacyDriver
 		}
@@ -1291,6 +1315,7 @@ func applyConnectionDefaults(cfg *Config) error {
 		if conn.Driver.Name == "" {
 			return fmt.Errorf("connection %s: driver must not be empty", conn.ID)
 		}
+		reconcileSpecification(&conn.Specification, &conn.Driver.Settings)
 		connections[conn.ID] = conn
 	}
 
@@ -1319,8 +1344,7 @@ func applyConnectionDefaults(cfg *Config) error {
 		if target.Name == "" {
 			clone := base.Clone()
 			if len(target.Settings) > 0 {
-				clone.Settings = make(json.RawMessage, len(target.Settings))
-				copy(clone.Settings, target.Settings)
+				clone.Settings = cloneRawMessage(target.Settings)
 			}
 			*target = clone
 			return nil
@@ -1329,7 +1353,7 @@ func applyConnectionDefaults(cfg *Config) error {
 			return fmt.Errorf("%s %s: connection requires driver %s but %s requested", kind, id, base.Name, target.Name)
 		}
 		if len(target.Settings) == 0 && len(base.Settings) > 0 {
-			target.Settings = base.Clone().Settings
+			target.Settings = cloneRawMessage(base.Settings)
 		}
 		return nil
 	}
@@ -1375,6 +1399,14 @@ func applyConnectionDefaults(cfg *Config) error {
 			return err
 		}
 	}
+
+	for i := range cfg.Reads {
+		reconcileSpecification(&cfg.Reads[i].Specification, &cfg.Reads[i].Driver.Settings)
+	}
+	for i := range cfg.Writes {
+		reconcileSpecification(&cfg.Writes[i].Specification, &cfg.Writes[i].Driver.Settings)
+	}
+
 	return nil
 }
 

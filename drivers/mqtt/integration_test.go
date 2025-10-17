@@ -19,6 +19,14 @@ import (
 )
 
 func TestReadGroupReceivesMessages(t *testing.T) {
+	testReadGroupReceivesMessages(t, false)
+}
+
+func TestReadGroupReceivesMessagesWithSpecification(t *testing.T) {
+	testReadGroupReceivesMessages(t, true)
+}
+
+func testReadGroupReceivesMessages(t *testing.T, useSpecification bool) {
 	brokerURL, shutdown := startMockBroker(t)
 	defer shutdown()
 
@@ -42,6 +50,19 @@ func TestReadGroupReceivesMessages(t *testing.T) {
 		t.Fatalf("marshal settings: %v", err)
 	}
 
+	readConfig := config.ReadGroupConfig{
+		ID: "rg1",
+		Signals: []config.ReadSignalConfig{
+			{Cell: "temperature", Type: config.ValueKindFloat},
+		},
+	}
+	if useSpecification {
+		readConfig.Specification = driverSettings
+		readConfig.Driver = config.DriverConfig{Name: "mqtt"}
+	} else {
+		readConfig.Driver = config.DriverConfig{Name: "mqtt", Settings: driverSettings}
+	}
+
 	cfg := &config.Config{
 		Cycle: config.Duration{Duration: 100 * time.Millisecond},
 		Logging: config.LoggingConfig{
@@ -52,15 +73,7 @@ func TestReadGroupReceivesMessages(t *testing.T) {
 		Cells: []config.CellConfig{
 			{ID: "temperature", Type: config.ValueKindFloat},
 		},
-		Reads: []config.ReadGroupConfig{
-			{
-				ID:     "rg1",
-				Driver: config.DriverConfig{Name: "mqtt", Settings: driverSettings},
-				Signals: []config.ReadSignalConfig{
-					{Cell: "temperature", Type: config.ValueKindFloat},
-				},
-			},
-		},
+		Reads: []config.ReadGroupConfig{readConfig},
 	}
 
 	svc, err := service.New(cfg, zerolog.New(io.Discard),
@@ -104,6 +117,14 @@ func TestReadGroupReceivesMessages(t *testing.T) {
 }
 
 func TestWriterPublishesCellValue(t *testing.T) {
+	testWriterPublishesCellValue(t, false)
+}
+
+func TestWriterPublishesCellValueWithSpecification(t *testing.T) {
+	testWriterPublishesCellValue(t, true)
+}
+
+func testWriterPublishesCellValue(t *testing.T, useSpecification bool) {
 	brokerURL, shutdown := startMockBroker(t)
 	defer shutdown()
 
@@ -134,6 +155,17 @@ func TestWriterPublishesCellValue(t *testing.T) {
 		t.Fatalf("subscribe failed: %v", err)
 	}
 
+	writeConfig := config.WriteTargetConfig{
+		ID:   "wt1",
+		Cell: "output",
+	}
+	if useSpecification {
+		writeConfig.Specification = driverSettings
+		writeConfig.Driver = config.DriverConfig{Name: "mqtt"}
+	} else {
+		writeConfig.Driver = config.DriverConfig{Name: "mqtt", Settings: driverSettings}
+	}
+
 	cfg := &config.Config{
 		Cycle: config.Duration{Duration: 100 * time.Millisecond},
 		Logging: config.LoggingConfig{
@@ -144,13 +176,7 @@ func TestWriterPublishesCellValue(t *testing.T) {
 		Cells: []config.CellConfig{
 			{ID: "output", Type: config.ValueKindNumber, Constant: 42},
 		},
-		Writes: []config.WriteTargetConfig{
-			{
-				ID:     "wt1",
-				Cell:   "output",
-				Driver: config.DriverConfig{Name: "mqtt", Settings: driverSettings},
-			},
-		},
+		Writes: []config.WriteTargetConfig{writeConfig},
 	}
 
 	svc, err := service.New(cfg, zerolog.New(io.Discard),

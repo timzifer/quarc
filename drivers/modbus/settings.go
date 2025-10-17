@@ -41,9 +41,13 @@ func resolveReadGroup(cfg config.ReadGroupConfig) (config.ReadGroupConfig, readG
 	lengthSet := false
 	gapSet := false
 
-	if len(cfg.Driver.Settings) > 0 {
+	payload := cfg.Specification
+	if len(payload) == 0 {
+		payload = cfg.Driver.Settings
+	}
+	if len(payload) > 0 {
 		var overrides readGroupOverrides
-		if err := decodeDriverSettings(cfg.Driver.Settings, &overrides); err != nil {
+		if err := decodeDriverSettings(payload, &overrides); err != nil {
 			return config.ReadGroupConfig{}, readGroupPlan{}, fmt.Errorf("read group %s: decode driver settings: %w", cfg.ID, err)
 		}
 		if overrides.Function != "" {
@@ -142,9 +146,13 @@ func resolveReadGroup(cfg config.ReadGroupConfig) (config.ReadGroupConfig, readG
 
 func resolveWriteTarget(cfg config.WriteTargetConfig) (config.WriteTargetConfig, error) {
 	resolved := cfg
-	if len(cfg.Driver.Settings) > 0 {
+	payload := cfg.Specification
+	if len(payload) == 0 {
+		payload = cfg.Driver.Settings
+	}
+	if len(payload) > 0 {
 		var overrides writeTargetOverrides
-		if err := decodeDriverSettings(cfg.Driver.Settings, &overrides); err != nil {
+		if err := decodeDriverSettings(payload, &overrides); err != nil {
 			return config.WriteTargetConfig{}, fmt.Errorf("write target %s: decode driver settings: %w", cfg.ID, err)
 		}
 		if overrides.Function != "" {

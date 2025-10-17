@@ -9,29 +9,31 @@ const modbusOverlayContent = `package modbus
 import module "quarc.dev/quarc/module"
 
 #Read: module.#Read & {
+    specification?: #ReadSpecification
     driver?: {
-        settings?: #ReadDriverSettings
+        settings?: #ReadSpecification
         ...
     }
     ...
 }
 
 #Write: module.#Write & {
+    specification?: #WriteSpecification
     driver?: {
-        settings?: #WriteDriverSettings
+        settings?: #WriteSpecification
         ...
     }
     ...
 }
 
-#ReadDriverSettings: {
+#ReadSpecification: {
     function?: string
     start?: int & >=0 & <=65535
     length?: int & >=0 & <=65535
     ...
 }
 
-#WriteDriverSettings: {
+#WriteSpecification: {
     function?: string
     address?: int & >=0 & <=65535
     endianness?: string
@@ -41,6 +43,10 @@ import module "quarc.dev/quarc/module"
     scale?: number
     ...
 }
+
+#ReadDriverSettings: #ReadSpecification
+
+#WriteDriverSettings: #WriteSpecification
 `
 
 func init() {

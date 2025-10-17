@@ -9,16 +9,18 @@ const mqttOverlayContent = `package mqtt
 import module "quarc.dev/quarc/module"
 
 #Read: module.#Read & {
+    specification?: #ReadSpecification
     driver?: {
-        settings?: #ReadDriverSettings
+        settings?: #ReadSpecification
         ...
     }
     ...
 }
 
 #Write: module.#Write & {
+    specification?: #WriteSpecification
     driver?: {
-        settings?: #WriteDriverSettings
+        settings?: #WriteSpecification
         ...
     }
     ...
@@ -92,7 +94,7 @@ import module "quarc.dev/quarc/module"
     home_assistant?: #HomeAssistant
 }
 
-#ReadDriverSettings: {
+#ReadSpecification: {
     connection: #Connection
     default_qos?: int & >=0 & <=2
     payload?: #PayloadConversion
@@ -140,7 +142,7 @@ import module "quarc.dev/quarc/module"
     extra?: [string]: _
 }
 
-#WriteDriverSettings: {
+#WriteSpecification: {
     connection: #Connection
     topic: string
     qos?: int & >=0 & <=2
@@ -150,6 +152,10 @@ import module "quarc.dev/quarc/module"
     rate_limit?: #RateLimit
     home_assistant?: #HomeAssistant
 }
+
+#ReadDriverSettings: #ReadSpecification
+
+#WriteDriverSettings: #WriteSpecification
 `
 
 func init() {
