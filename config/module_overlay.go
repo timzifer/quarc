@@ -28,7 +28,6 @@ const moduleOverlayContent = `package module
     workers?: _
     dsl?: _
     policies?: _
-    server?: _
     hot_reload?: bool
     programs?: [...#Program]
     cells?: [...#Cell]
@@ -75,7 +74,6 @@ const moduleOverlayContent = `package module
     ttl?: string
     signals: [...#ReadSignal]
     disable?: bool
-    can?: _
     specification?: _
     driver?: {
         name?: string
@@ -84,10 +82,6 @@ const moduleOverlayContent = `package module
     }
     metadata?: _
     driver_metadata?: _
-    // Deprecated fields retained for backward compatibility.
-    function?: string
-    start?: int
-    length?: int
     ...
 }
 
@@ -105,14 +99,8 @@ const moduleOverlayContent = `package module
         ...
     }
     metadata?: _
-    // Deprecated fields retained for backward compatibility.
-    function?: string
-    address?: int
-    endianness?: string
-    signed?: bool
     deadband?: number
     rate_limit?: string
-    scale?: number
     ...
 }
 

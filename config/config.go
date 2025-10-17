@@ -259,53 +259,17 @@ type ReadSignalAggregationConfig struct {
 
 // ReadGroupConfig describes a block read.
 type ReadGroupConfig struct {
-	ID            string              `json:"id"`
-	Connection    string              `json:"connection,omitempty"`
-	Endpoint      EndpointConfig      `json:"endpoint"`
-	TTL           Duration            `json:"ttl"`
-	Signals       []ReadSignalConfig  `json:"signals"`
-	Disable       bool                `json:"disable,omitempty"`
-	CAN           *CANReadGroupConfig `json:"can,omitempty"`
-	Specification json.RawMessage     `json:"specification,omitempty"`
-	Driver        DriverConfig        `json:"driver"`
-	Metadata      json.RawMessage     `json:"metadata,omitempty"`
-	// DriverMetadata carries driver-specific planning hints captured at load time.
-	DriverMetadata json.RawMessage `json:"driver_metadata,omitempty"`
-	// Deprecated: Function is retained for backward compatibility with legacy configurations.
-	LegacyFunction string `json:"function,omitempty"`
-	// Deprecated: Start is retained for backward compatibility with legacy configurations.
-	LegacyStart *uint16 `json:"start,omitempty"`
-	// Deprecated: Length is retained for backward compatibility with legacy configurations.
-	LegacyLength *uint16         `json:"length,omitempty"`
-	Source       ModuleReference `json:"-"`
-}
-
-// CANReadGroupConfig describes how CAN frames should be ingested from a byte stream.
-type CANReadGroupConfig struct {
-	Protocol    string                  `json:"protocol,omitempty"`
-	Mode        string                  `json:"mode,omitempty"`
-	DBC         string                  `json:"dbc"`
-	BufferSize  int                     `json:"buffer_size,omitempty"`
-	ReadTimeout Duration                `json:"read_timeout,omitempty"`
-	Frames      []CANFrameBindingConfig `json:"frames"`
-}
-
-// CANFrameBindingConfig maps a CAN message to one or more cell updates.
-type CANFrameBindingConfig struct {
-	Message  string                   `json:"message,omitempty"`
-	FrameID  string                   `json:"frame_id,omitempty"`
-	Extended *bool                    `json:"extended,omitempty"`
-	Channel  *uint8                   `json:"channel,omitempty"`
-	Signals  []CANSignalBindingConfig `json:"signals"`
-}
-
-// CANSignalBindingConfig maps a decoded CAN signal to a cell.
-type CANSignalBindingConfig struct {
-	Name    string   `json:"name"`
-	Cell    string   `json:"cell"`
-	Scale   *float64 `json:"scale,omitempty"`
-	Offset  *float64 `json:"offset,omitempty"`
-	Quality *float64 `json:"quality,omitempty"`
+	ID             string             `json:"id"`
+	Connection     string             `json:"connection,omitempty"`
+	Endpoint       EndpointConfig     `json:"endpoint"`
+	TTL            Duration           `json:"ttl"`
+	Signals        []ReadSignalConfig `json:"signals"`
+	Disable        bool               `json:"disable,omitempty"`
+	Specification  json.RawMessage    `json:"specification,omitempty"`
+	Driver         DriverConfig       `json:"driver"`
+	Metadata       json.RawMessage    `json:"metadata,omitempty"`
+	DriverMetadata json.RawMessage    `json:"driver_metadata,omitempty"`
+	Source         ModuleReference    `json:"-"`
 }
 
 // WriteTargetConfig describes how a cell is pushed to Modbus.
@@ -314,11 +278,6 @@ type WriteTargetConfig struct {
 	Cell          string          `json:"cell"`
 	Connection    string          `json:"connection,omitempty"`
 	Endpoint      EndpointConfig  `json:"endpoint"`
-	Function      string          `json:"function"`
-	Address       uint16          `json:"address"`
-	Scale         float64         `json:"scale,omitempty"`
-	Endianness    string          `json:"endianness,omitempty"`
-	Signed        bool            `json:"signed,omitempty"`
 	Deadband      float64         `json:"deadband,omitempty"`
 	RateLimit     Duration        `json:"rate_limit,omitempty"`
 	Priority      int             `json:"priority,omitempty"`
@@ -445,29 +404,6 @@ type WorkerSlots struct {
 	Write   int `json:"write,omitempty"`
 }
 
-// ServerCellConfig maps a cell onto an input register address exposed via the embedded Modbus server.
-//
-// Deprecated: The embedded Modbus server has been removed. This structure is kept
-// only so older configurations continue to decode but it is ignored by the
-// service.
-type ServerCellConfig struct {
-	Cell    string  `json:"cell"`
-	Address uint16  `json:"address"`
-	Scale   float64 `json:"scale,omitempty"`
-	Signed  bool    `json:"signed,omitempty"`
-}
-
-// ServerConfig configures the optional embedded Modbus server.
-//
-// Deprecated: The embedded Modbus server has been removed. The configuration is
-// ignored and retained solely for schema compatibility.
-type ServerConfig struct {
-	Enabled bool               `json:"enabled"`
-	Listen  string             `json:"listen"`
-	UnitID  uint8              `json:"unit_id,omitempty"`
-	Cells   []ServerCellConfig `json:"cells"`
-}
-
 // Config is the root configuration structure for the service.
 type Config struct {
 	Name        string                 `json:"name,omitempty"`
@@ -486,12 +422,8 @@ type Config struct {
 	DSL         DSLConfig              `json:"dsl"`
 	Helpers     []HelperFunctionConfig `json:"helpers,omitempty"`
 	Policies    GlobalPolicies         `json:"policies"`
-	// Deprecated: the embedded Modbus server has been removed. The field is
-	// ignored when loading the configuration and will be dropped in a
-	// future release.
-	Server    ServerConfig    `json:"server"`
-	HotReload bool            `json:"hot_reload,omitempty"`
-	Source    ModuleReference `json:"-"`
+	HotReload   bool                   `json:"hot_reload,omitempty"`
+	Source      ModuleReference        `json:"-"`
 }
 
 // Load reads and decodes the configuration file from disk.
@@ -513,7 +445,7 @@ func Load(path string) (*Config, error) {
 		buildInst *build.Instance
 	)
 	if info.IsDir() {
-		inst, buildInst, err = buildInstance(abs, ".")
+		inst, buildInst, err = buildInstance(abs, "./...")
 	} else {
 		inst, buildInst, err = buildInstance(filepath.Dir(abs), filepath.Base(abs))
 	}
@@ -532,16 +464,26 @@ func buildInstance(dir, target string) (*cue.Instance, *build.Instance, error) {
 	if len(instances) == 0 {
 		return nil, nil, fmt.Errorf("no CUE packages found in %s", dir)
 	}
-	buildInst := instances[0]
+
+	merged := &build.Instance{
+		Dir:        instances[0].Dir,
+		PkgName:    instances[0].PkgName,
+		ImportPath: instances[0].ImportPath,
+		Root:       instances[0].Root,
+	}
+	for _, inst := range instances {
+		merged.Files = append(merged.Files, inst.Files...)
+	}
+
 	var runtime cue.Runtime
-	inst, err := runtime.Build(buildInst)
+	inst, err := runtime.Build(merged)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build CUE instance: %w", err)
 	}
 	if err := inst.Err; err != nil {
 		return nil, nil, fmt.Errorf("invalid CUE instance: %w", err)
 	}
-	return inst, buildInst, nil
+	return inst, merged, nil
 }
 
 func decodeInstance(path string, inst *cue.Instance, buildInst *build.Instance) (*Config, error) {
@@ -570,11 +512,7 @@ func decodeInstance(path string, inst *cue.Instance, buildInst *build.Instance) 
 	}
 	pkgPrefix := firstNonEmpty(strings.TrimSpace(explicitPackage), rootNamespace, fallbackNamespace)
 
-	sanitized, err := fillLegacyFieldDefaults(configVal)
-	if err != nil {
-		return nil, fmt.Errorf("prepare legacy fields: %w", err)
-	}
-	data, err := sanitized.MarshalJSON()
+	data, err := configVal.MarshalJSON()
 	if err != nil {
 		return nil, fmt.Errorf("encode config to JSON: %w", err)
 	}
@@ -587,40 +525,6 @@ func decodeInstance(path string, inst *cue.Instance, buildInst *build.Instance) 
 	captureDeclaredSourcePackages(configVal, &cfg)
 	normalizeSignalBuffers(&cfg)
 
-	moduleNamespace := strings.TrimSpace(pkgPrefix)
-	if moduleNamespace != "" {
-		for i := range cfg.Connections {
-			if strings.TrimSpace(cfg.Connections[i].Source.Package) == "" {
-				cfg.Connections[i].Source.Package = moduleNamespace
-			}
-		}
-		for i := range cfg.Cells {
-			if strings.TrimSpace(cfg.Cells[i].Source.Package) == "" {
-				cfg.Cells[i].Source.Package = moduleNamespace
-			}
-		}
-		for i := range cfg.Programs {
-			if strings.TrimSpace(cfg.Programs[i].Source.Package) == "" {
-				cfg.Programs[i].Source.Package = moduleNamespace
-			}
-		}
-		for i := range cfg.Reads {
-			if strings.TrimSpace(cfg.Reads[i].Source.Package) == "" {
-				cfg.Reads[i].Source.Package = moduleNamespace
-			}
-		}
-		for i := range cfg.Writes {
-			if strings.TrimSpace(cfg.Writes[i].Source.Package) == "" {
-				cfg.Writes[i].Source.Package = moduleNamespace
-			}
-		}
-		for i := range cfg.Logic {
-			if strings.TrimSpace(cfg.Logic[i].Source.Package) == "" {
-				cfg.Logic[i].Source.Package = moduleNamespace
-			}
-		}
-	}
-
 	metaFile := path
 	if file := strings.TrimSpace(moduleSources.root.File); file != "" {
 		metaFile = file
@@ -631,7 +535,6 @@ func decodeInstance(path string, inst *cue.Instance, buildInst *build.Instance) 
 		return nil, err
 	}
 	qualifyConfig(&cfg, pkgPrefix)
-	applyLegacyDriverDefaults(&cfg)
 	if err := applyConnectionDefaults(&cfg); err != nil {
 		return nil, err
 	}
@@ -639,96 +542,6 @@ func decodeInstance(path string, inst *cue.Instance, buildInst *build.Instance) 
 		return nil, err
 	}
 	return &cfg, nil
-}
-
-func fillLegacyFieldDefaults(val cue.Value) (cue.Value, error) {
-	ensure := func(v cue.Value, path cue.Path, fallback interface{}) (cue.Value, error) {
-		field := v.LookupPath(path)
-		if !field.Exists() || field.IsConcrete() {
-			return v, nil
-		}
-		v = v.FillPath(path, fallback)
-		if err := v.Err(); err != nil {
-			return v, err
-		}
-		return v, nil
-	}
-
-	reads := val.LookupPath(cue.MakePath(cue.Str("reads")))
-	if iter, err := reads.List(); err == nil {
-		idx := 0
-		for iter.Next() {
-			if val, err = ensure(val, cue.MakePath(cue.Str("reads"), cue.Index(idx), cue.Str("function")), ""); err != nil {
-				return val, err
-			}
-			if val, err = ensure(val, cue.MakePath(cue.Str("reads"), cue.Index(idx), cue.Str("start")), 0); err != nil {
-				return val, err
-			}
-			if val, err = ensure(val, cue.MakePath(cue.Str("reads"), cue.Index(idx), cue.Str("length")), 0); err != nil {
-				return val, err
-			}
-			idx++
-		}
-	}
-
-	writes := val.LookupPath(cue.MakePath(cue.Str("writes")))
-	if iter, err := writes.List(); err == nil {
-		idx := 0
-		for iter.Next() {
-			if val, err = ensure(val, cue.MakePath(cue.Str("writes"), cue.Index(idx), cue.Str("function")), ""); err != nil {
-				return val, err
-			}
-			idx++
-		}
-	}
-
-	return val, nil
-}
-
-func applyLegacyDriverDefaults(cfg *Config) {
-	if cfg == nil {
-		return
-	}
-
-	const legacyDriver = "modbus"
-
-	for i := range cfg.Reads {
-		read := &cfg.Reads[i]
-		if strings.TrimSpace(read.Driver.Name) != "" || strings.TrimSpace(read.Connection) != "" {
-			continue
-		}
-		if function := strings.TrimSpace(read.LegacyFunction); function != "" {
-			settings := map[string]interface{}{"function": function}
-			if read.LegacyStart != nil {
-				settings["start"] = *read.LegacyStart
-			}
-			if read.LegacyLength != nil {
-				settings["length"] = *read.LegacyLength
-			}
-			if encoded, err := json.Marshal(settings); err == nil {
-				raw := json.RawMessage(encoded)
-				read.Specification = cloneRawMessage(raw)
-				read.Driver.Settings = cloneRawMessage(raw)
-			}
-			read.Driver.Name = legacyDriver
-		}
-	}
-
-	for i := range cfg.Writes {
-		write := &cfg.Writes[i]
-		if strings.TrimSpace(write.Driver.Name) != "" || strings.TrimSpace(write.Connection) != "" {
-			continue
-		}
-		if function := strings.TrimSpace(write.Function); function != "" {
-			settings := map[string]interface{}{"function": function}
-			if encoded, err := json.Marshal(settings); err == nil {
-				raw := json.RawMessage(encoded)
-				write.Specification = cloneRawMessage(raw)
-				write.Driver.Settings = cloneRawMessage(raw)
-			}
-			write.Driver.Name = legacyDriver
-		}
-	}
 }
 
 // CycleInterval returns the configured controller cycle duration.
@@ -896,12 +709,16 @@ func (v moduleSourceVisitor) visitField(field *ast.Field) {
 	}
 	switch name {
 	case "config":
-		lit, ok := field.Value.(*ast.StructLit)
-		if !ok {
-			return
+		switch val := field.Value.(type) {
+		case *ast.StructLit:
+			v.recordRoot()
+			v.visitStructLit(val, true)
+		case *ast.BinaryExpr:
+			if lit, ok := val.Y.(*ast.StructLit); ok {
+				v.recordRoot()
+				v.visitStructLit(lit, true)
+			}
 		}
-		v.recordRoot()
-		v.visitStructLit(lit, true)
 	default:
 		if lit, ok := field.Value.(*ast.StructLit); ok {
 			v.visitStructLit(lit, false)
@@ -1450,13 +1267,6 @@ func qualifyConfig(cfg *Config, pkg string) {
 				cfg.Reads[i].Signals[j].Aggregations[k].Quality = qualifyRef(namespace, cfg.Reads[i].Signals[j].Aggregations[k].Quality)
 			}
 		}
-		if cfg.Reads[i].CAN != nil {
-			for j := range cfg.Reads[i].CAN.Frames {
-				for k := range cfg.Reads[i].CAN.Frames[j].Signals {
-					cfg.Reads[i].CAN.Frames[j].Signals[k].Cell = qualifyRef(namespace, cfg.Reads[i].CAN.Frames[j].Signals[k].Cell)
-				}
-			}
-		}
 	}
 	for i := range cfg.Writes {
 		namespace := combineNamespaces(root, cfg.Writes[i].Source.Package)
@@ -1473,9 +1283,6 @@ func qualifyConfig(cfg *Config, pkg string) {
 		}
 	}
 	serverNamespace := combineNamespaces(root, cfg.Source.Package)
-	for i := range cfg.Server.Cells {
-		cfg.Server.Cells[i].Cell = qualifyRef(serverNamespace, cfg.Server.Cells[i].Cell)
-	}
 	cfg.Policies.WatchdogCell = qualifyRef(serverNamespace, cfg.Policies.WatchdogCell)
 }
 
@@ -1681,26 +1488,41 @@ func captureDeclaredSourcePackages(configVal cue.Value, cfg *Config) {
 	}
 
 	if pkg := extractPackageFromValue(configVal); pkg != "" {
-		cfg.Source.Package = pkg
+		// Only apply the package if there isn't one already.
+		if cfg.Source.Package == "" {
+			cfg.Source.Package = pkg
+		}
 	}
 
 	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("connections"))), len(cfg.Connections), func(i int, pkg string) {
-		cfg.Connections[i].Source.Package = pkg
+		if cfg.Connections[i].Source.Package == "" {
+			cfg.Connections[i].Source.Package = pkg
+		}
 	})
 	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("cells"))), len(cfg.Cells), func(i int, pkg string) {
-		cfg.Cells[i].Source.Package = pkg
+		if cfg.Cells[i].Source.Package == "" {
+			cfg.Cells[i].Source.Package = pkg
+		}
 	})
 	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("programs"))), len(cfg.Programs), func(i int, pkg string) {
-		cfg.Programs[i].Source.Package = pkg
+		if cfg.Programs[i].Source.Package == "" {
+			cfg.Programs[i].Source.Package = pkg
+		}
 	})
 	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("reads"))), len(cfg.Reads), func(i int, pkg string) {
-		cfg.Reads[i].Source.Package = pkg
+		if cfg.Reads[i].Source.Package == "" {
+			cfg.Reads[i].Source.Package = pkg
+		}
 	})
 	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("writes"))), len(cfg.Writes), func(i int, pkg string) {
-		cfg.Writes[i].Source.Package = pkg
+		if cfg.Writes[i].Source.Package == "" {
+			cfg.Writes[i].Source.Package = pkg
+		}
 	})
 	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("logic"))), len(cfg.Logic), func(i int, pkg string) {
-		cfg.Logic[i].Source.Package = pkg
+		if cfg.Logic[i].Source.Package == "" {
+			cfg.Logic[i].Source.Package = pkg
+		}
 	})
 }
 

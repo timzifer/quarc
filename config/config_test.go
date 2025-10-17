@@ -26,127 +26,8 @@ const baseSections = `
     dsl: {}
     live_view: {}
     policies: {}
-    server: {
-        enabled: false
-        listen: ""
-        cells: []
-    }
     hot_reload: false
 `
-
-func TestLoadCUEConfigNamespacing(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.cue")
-
-	content := `package plant
-
-config: {
-    package: "plant.core"
-    name: "Core"
-    description: "Core configuration"
-    cycle: "1s"
-` + baseSections + `
-    reads: [
-        {
-            id: "sensors"
-            endpoint: {
-                address: "localhost:502"
-                unit_id: 1
-                timeout: "1s"
-            }
-            driver: {
-                name: "modbus"
-                settings: {
-                    function: "holding"
-                    start: 0
-                    length: 1
-                }
-            }
-            ttl: "1s"
-            signals: [
-                {
-                    cell: "temperature"
-                    offset: 0
-                    type: "number"
-                },
-            ]
-        },
-    ]
-    cells: [
-        {
-            id: "temperature"
-            type: "number"
-        },
-    ]
-}
-`
-
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-
-	if len(cfg.Cells) != 1 {
-		t.Fatalf("expected 1 cell, got %d", len(cfg.Cells))
-	}
-	if cfg.Cells[0].ID != "plant.core:temperature" {
-		t.Fatalf("expected namespaced cell id, got %q", cfg.Cells[0].ID)
-	}
-	if len(cfg.Reads) != 1 {
-		t.Fatalf("expected 1 read, got %d", len(cfg.Reads))
-	}
-	if cfg.Reads[0].Signals[0].Cell != "plant.core:temperature" {
-		t.Fatalf("expected signal to reference namespaced cell, got %q", cfg.Reads[0].Signals[0].Cell)
-	}
-	if cfg.Source.Package != "plant.core" {
-		t.Fatalf("expected source package to be plant.core, got %q", cfg.Source.Package)
-	}
-}
-
-func TestNestedPackageQualification(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.cue")
-
-	content := `package plant
-
-config: {
-    package: "plant.heating.underfloor"
-    cycle: "1s"
-` + baseSections + `
-    cells: [
-        {
-            id: "flow"
-            type: "number"
-        },
-    ]
-    reads: []
-    writes: []
-}
-`
-
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-
-	if len(cfg.Cells) != 1 {
-		t.Fatalf("expected 1 cell, got %d", len(cfg.Cells))
-	}
-	if cfg.Cells[0].ID != "plant.heating.underfloor:flow" {
-		t.Fatalf("expected nested package id, got %q", cfg.Cells[0].ID)
-	}
-	if cfg.Source.Package != "plant.heating.underfloor" {
-		t.Fatalf("expected source package to match nested package, got %q", cfg.Source.Package)
-	}
-}
 
 func TestModulePackageQualifiedWithinRoot(t *testing.T) {
 	cfg := Config{
@@ -223,9 +104,13 @@ config: {
                 address: "localhost:502"
                 unit_id: 1
             }
-            function: "holding"
-            address: 1
-            ttl: "1s"
+            driver: {
+                name: "modbus"
+                settings: {
+                    function: "holding"
+                    address: 1
+                }
+            }
         },
     ]
 }
@@ -270,9 +155,14 @@ template: {
             address: string
             unit_id: int
         }
-        function: string
-        start: int
-        length: int
+        driver: {
+            name: string
+            settings: {
+                function: string
+                start: int
+                length: int
+            }
+        }
         ttl: "1s"
         signals: [
             {
@@ -403,16 +293,21 @@ config: {
 	}
 }
 
-func TestDirectoryMerge(t *testing.T) {
+func TestLoadCUEConfigFromDirectory(t *testing.T) {
 	dir := t.TempDir()
 
+	subDir := filepath.Join(dir, "heating", "underfloor")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
 	mainPath := filepath.Join(dir, "main.cue")
-	extraPath := filepath.Join(dir, "extra.cue")
+	extraPath := filepath.Join(subDir, "extra.cue")
 
 	mainContent := `package plant
 
 config: {
-    package: "plant.core"
+    package: "plant"
     cycle: "1s"
 ` + baseSections + `
     cells: [
@@ -425,7 +320,7 @@ config: {
 }
 `
 
-	extraContent := `package plant
+	extraContent := `package underfloor
 
 config: config & {
     reads: [
@@ -446,7 +341,7 @@ config: config & {
             ttl: "1s"
             signals: [
                 {
-                    cell: "temperature"
+                    cell: "plant:temperature"
                     offset: 0
                     type: "number"
                 },
@@ -474,7 +369,10 @@ config: config & {
 	if len(cfg.Reads) != 1 {
 		t.Fatalf("expected 1 read, got %d", len(cfg.Reads))
 	}
-	if cfg.Reads[0].Signals[0].Cell != "plant.core:temperature" {
+	if cfg.Reads[0].ID != "plant.heating.underfloor:sensor" {
+		t.Fatalf("expected read id to be qualified by path, got %q", cfg.Reads[0].ID)
+	}
+	if cfg.Reads[0].Signals[0].Cell != "plant:temperature" {
 		t.Fatalf("expected read to reference namespaced cell, got %q", cfg.Reads[0].Signals[0].Cell)
 	}
 }
