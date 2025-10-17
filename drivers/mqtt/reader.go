@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,20 +26,20 @@ func NewReadFactory() readers.ReaderFactory {
 		if deps.Cells == nil {
 			return nil, fmt.Errorf("read group %s: missing cell store dependency", cfg.ID)
 		}
-		if cfg.DriverSettings == nil {
-			return nil, fmt.Errorf("read group %s: driver_settings missing", cfg.ID)
+		if len(cfg.Driver.Settings) == 0 {
+			return nil, fmt.Errorf("read group %s: driver settings missing", cfg.ID)
 		}
 		var settings ReadSettings
-		if err := json.Unmarshal(cfg.DriverSettings, &settings); err != nil {
-			return nil, fmt.Errorf("read group %s: decode driver_settings: %w", cfg.ID, err)
+		if err := json.Unmarshal(cfg.Driver.Settings, &settings); err != nil {
+			return nil, fmt.Errorf("read group %s: decode driver settings: %w", cfg.ID, err)
 		}
 		if err := settings.Validate(cfg.Connection == ""); err != nil {
 			return nil, fmt.Errorf("read group %s: %w", cfg.ID, err)
 		}
 
-		function := cfg.Function
-		if function == "" {
-			function = "mqtt"
+		driverName := strings.TrimSpace(cfg.Driver.Name)
+		if driverName == "" {
+			driverName = "mqtt"
 		}
 
 		var shared *sharedConnection
@@ -60,7 +61,7 @@ func NewReadFactory() readers.ReaderFactory {
 
 		group := &mqttReadGroup{
 			id:            cfg.ID,
-			function:      function,
+			driver:        driverName,
 			source:        cfg.Source,
 			settings:      settings,
 			bufferStatus:  make(map[string]readers.SignalBufferStatus),
@@ -142,9 +143,9 @@ type readSubscription struct {
 }
 
 type mqttReadGroup struct {
-	id       string
-	function string
-	source   config.ModuleReference
+	id     string
+	driver string
+	source config.ModuleReference
 
 	settings ReadSettings
 	client   mqtt.Client
@@ -203,11 +204,12 @@ func (g *mqttReadGroup) Status() readers.ReadGroupStatus {
 	defer g.mu.RUnlock()
 	return readers.ReadGroupStatus{
 		ID:       g.id,
-		Function: g.function,
+		Driver:   g.driver,
 		Disabled: g.disabled.Load(),
 		LastRun:  g.lastMessage,
 		Source:   g.source,
 		Buffers:  cloneBufferStatus(g.bufferStatus),
+		Metadata: map[string]interface{}{"subscriptions": len(g.subscriptions)},
 	}
 }
 

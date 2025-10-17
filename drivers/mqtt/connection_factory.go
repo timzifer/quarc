@@ -96,12 +96,12 @@ func (h *sharedConnection) Close() error {
 // and writes.
 func NewConnectionFactory() connections.Factory {
 	return func(cfg config.IOConnectionConfig) (connections.Handle, error) {
-		if len(cfg.DriverSettings) == 0 {
-			return nil, fmt.Errorf("mqtt: connection %s: driver_settings missing", cfg.ID)
+		if len(cfg.Driver.Settings) == 0 {
+			return nil, fmt.Errorf("mqtt: connection %s: driver settings missing", cfg.ID)
 		}
 		var settings ConnectionSettings
-		if err := json.Unmarshal(cfg.DriverSettings, &settings); err != nil {
-			return nil, fmt.Errorf("mqtt: connection %s: decode driver_settings: %w", cfg.ID, err)
+		if err := json.Unmarshal(cfg.Driver.Settings, &settings); err != nil {
+			return nil, fmt.Errorf("mqtt: connection %s: decode driver settings: %w", cfg.ID, err)
 		}
 		if settings.Broker == "" {
 			return nil, fmt.Errorf("mqtt: connection %s: connection.broker is required", cfg.ID)

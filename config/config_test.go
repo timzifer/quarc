@@ -54,9 +54,14 @@ config: {
                 unit_id: 1
                 timeout: "1s"
             }
-            function: "holding"
-            start: 0
-            length: 1
+            driver: {
+                name: "modbus"
+                settings: {
+                    function: "holding"
+                    start: 0
+                    length: 1
+                }
+            }
             ttl: "1s"
             signals: [
                 {
@@ -296,9 +301,14 @@ config: {
                 address: "localhost:502"
                 unit_id: 1
             }
-            function: "holding"
-            start: 0
-            length: 1
+            driver: {
+                name: "modbus"
+                settings: {
+                    function: "holding"
+                    start: 0
+                    length: 1
+                }
+            }
             signals: [
                 {
                     cell: "pressure"
@@ -425,9 +435,14 @@ config: config & {
                 address: "localhost:502"
                 unit_id: 1
             }
-            function: "holding"
-            start: 0
-            length: 1
+            driver: {
+                name: "modbus"
+                settings: {
+                    function: "holding"
+                    start: 0
+                    length: 1
+                }
+            }
             ttl: "1s"
             signals: [
                 {
@@ -487,9 +502,14 @@ config: {
                 address: "localhost:502"
                 unit_id: 1
             }
-            function: "holding"
-            start: 0
-            length: 1
+            driver: {
+                name: "modbus"
+                settings: {
+                    function: "holding"
+                    start: 0
+                    length: 1
+                }
+            }
             ttl: "1s"
             signals: [
                 {
@@ -576,9 +596,14 @@ config: {
                 address: "localhost:502"
                 unit_id: 1
             }
-            function: "holding"
-            start: 0
-            length: 1
+            driver: {
+                name: "modbus"
+                settings: {
+                    function: "holding"
+                    start: 0
+                    length: 1
+                }
+            }
             ttl: "1s"
             signals: [
                 {
@@ -674,9 +699,14 @@ config: {
                 address: "localhost:502"
                 unit_id: 1
             }
-            function: "holding"
-            start: 0
-            length: 1
+            driver: {
+                name: "modbus"
+                settings: {
+                    function: "holding"
+                    start: 0
+                    length: 1
+                }
+            }
             ttl: "1s"
             signals: [
                 {
@@ -770,10 +800,9 @@ func TestApplyConnectionDefaults(t *testing.T) {
 	sharedSettings := json.RawMessage(`{"shared":true}`)
 	cfg := &Config{
 		Connections: []IOConnectionConfig{{
-			ID:             "plant:shared",
-			Driver:         "stub",
-			Endpoint:       EndpointConfig{Address: "127.0.0.1:502", UnitID: 1, Timeout: Duration{Duration: time.Second}},
-			DriverSettings: sharedSettings,
+			ID:       "plant:shared",
+			Driver:   DriverConfig{Name: "stub", Settings: sharedSettings},
+			Endpoint: EndpointConfig{Address: "127.0.0.1:502", UnitID: 1, Timeout: Duration{Duration: time.Second}},
 		}},
 		Reads: []ReadGroupConfig{
 			{
@@ -788,7 +817,8 @@ func TestApplyConnectionDefaults(t *testing.T) {
 			},
 			{
 				ID:       "plant:inline",
-				Endpoint: EndpointConfig{Address: "192.0.2.20:1502", Driver: "stub"},
+				Driver:   DriverConfig{Name: "stub"},
+				Endpoint: EndpointConfig{Address: "192.0.2.20:1502"},
 			},
 		},
 		Writes: []WriteTargetConfig{
@@ -799,11 +829,11 @@ func TestApplyConnectionDefaults(t *testing.T) {
 				Endpoint:   EndpointConfig{},
 			},
 			{
-				ID:             "plant:write-custom",
-				Cell:           "plant:cell",
-				Connection:     "plant:shared",
-				Endpoint:       EndpointConfig{},
-				DriverSettings: json.RawMessage(`{"local":true}`),
+				ID:         "plant:write-custom",
+				Cell:       "plant:cell",
+				Connection: "plant:shared",
+				Endpoint:   EndpointConfig{},
+				Driver:     DriverConfig{Settings: json.RawMessage(`{"local":true}`)},
 			},
 		},
 	}
@@ -812,21 +842,24 @@ func TestApplyConnectionDefaults(t *testing.T) {
 		t.Fatalf("apply connection defaults: %v", err)
 	}
 
-	if cfg.Connections[0].Endpoint.Driver != "stub" {
-		t.Fatalf("expected connection driver to be normalised, got %q", cfg.Connections[0].Endpoint.Driver)
+	if cfg.Connections[0].Driver.Name != "stub" {
+		t.Fatalf("expected connection driver to be normalised, got %q", cfg.Connections[0].Driver.Name)
 	}
 
-	if cfg.Reads[0].Endpoint.Address != "127.0.0.1:502" || cfg.Reads[0].Endpoint.Driver != "stub" {
+	if cfg.Reads[0].Endpoint.Address != "127.0.0.1:502" {
 		t.Fatalf("expected read defaults to apply, got %+v", cfg.Reads[0].Endpoint)
 	}
 	if cfg.Reads[0].Endpoint.Timeout.Duration != time.Second {
 		t.Fatalf("expected read timeout to inherit, got %v", cfg.Reads[0].Endpoint.Timeout.Duration)
 	}
-	if len(cfg.Reads[0].DriverSettings) == 0 {
+	if cfg.Reads[0].Driver.Name != "stub" {
+		t.Fatalf("expected read driver to inherit, got %q", cfg.Reads[0].Driver.Name)
+	}
+	if len(cfg.Reads[0].Driver.Settings) == 0 {
 		t.Fatalf("expected read driver settings to inherit")
 	}
-	if len(cfg.Reads[0].DriverSettings) > 0 && len(cfg.Connections[0].DriverSettings) > 0 {
-		if &cfg.Reads[0].DriverSettings[0] == &cfg.Connections[0].DriverSettings[0] {
+	if len(cfg.Reads[0].Driver.Settings) > 0 && len(cfg.Connections[0].Driver.Settings) > 0 {
+		if &cfg.Reads[0].Driver.Settings[0] == &cfg.Connections[0].Driver.Settings[0] {
 			t.Fatalf("expected driver settings to be cloned, not shared")
 		}
 	}
@@ -834,27 +867,33 @@ func TestApplyConnectionDefaults(t *testing.T) {
 	if cfg.Reads[1].Endpoint.Address != "192.0.2.10:1502" {
 		t.Fatalf("expected read override address to be preserved, got %q", cfg.Reads[1].Endpoint.Address)
 	}
-	if cfg.Reads[1].Endpoint.Driver != "stub" {
-		t.Fatalf("expected read override driver to match connection, got %q", cfg.Reads[1].Endpoint.Driver)
+	if cfg.Reads[1].Driver.Name != "stub" {
+		t.Fatalf("expected read override driver to match connection, got %q", cfg.Reads[1].Driver.Name)
 	}
 
 	if cfg.Reads[2].Endpoint.Address != "192.0.2.20:1502" {
 		t.Fatalf("expected inline endpoint to remain unchanged, got %q", cfg.Reads[2].Endpoint.Address)
 	}
+	if cfg.Reads[2].Driver.Name != "stub" {
+		t.Fatalf("expected inline read driver to remain, got %q", cfg.Reads[2].Driver.Name)
+	}
 
-	if cfg.Writes[0].Endpoint.Address != "127.0.0.1:502" || cfg.Writes[0].Endpoint.Driver != "stub" {
+	if cfg.Writes[0].Endpoint.Address != "127.0.0.1:502" {
 		t.Fatalf("expected write defaults to apply, got %+v", cfg.Writes[0].Endpoint)
 	}
-	if len(cfg.Writes[0].DriverSettings) == 0 {
+	if cfg.Writes[0].Driver.Name != "stub" {
+		t.Fatalf("expected write driver to inherit, got %q", cfg.Writes[0].Driver.Name)
+	}
+	if len(cfg.Writes[0].Driver.Settings) == 0 {
 		t.Fatalf("expected write driver settings to inherit")
 	}
-	if len(cfg.Writes[0].DriverSettings) > 0 && len(cfg.Connections[0].DriverSettings) > 0 {
-		if &cfg.Writes[0].DriverSettings[0] == &cfg.Connections[0].DriverSettings[0] {
+	if len(cfg.Writes[0].Driver.Settings) > 0 && len(cfg.Connections[0].Driver.Settings) > 0 {
+		if &cfg.Writes[0].Driver.Settings[0] == &cfg.Connections[0].Driver.Settings[0] {
 			t.Fatalf("expected write driver settings to be cloned")
 		}
 	}
-	if string(cfg.Writes[1].DriverSettings) != `{"local":true}` {
-		t.Fatalf("expected write-specific driver settings to remain, got %s", string(cfg.Writes[1].DriverSettings))
+	if string(cfg.Writes[1].Driver.Settings) != `{"local":true}` {
+		t.Fatalf("expected write-specific driver settings to remain, got %s", string(cfg.Writes[1].Driver.Settings))
 	}
 }
 
@@ -863,7 +902,7 @@ func TestApplyConnectionDefaultsUnknownConnection(t *testing.T) {
 		Reads: []ReadGroupConfig{{
 			ID:         "plant:missing",
 			Connection: "plant:unknown",
-			Endpoint:   EndpointConfig{Driver: "stub"},
+			Driver:     DriverConfig{Name: "stub"},
 		}},
 	}
 	if err := applyConnectionDefaults(cfg); err == nil {

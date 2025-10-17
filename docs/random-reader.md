@@ -13,13 +13,14 @@ import (
 )
 
 svc, err := service.New(cfg, logger,
-        service.WithReaderFactory("random", random.NewReadFactory()),
+        service.WithDriver("random", service.DriverFactories{
+                Reader: random.NewReadFactory(),
+        }),
 )
 ```
 
-Add the driver to your configuration by setting the endpoint `driver` to
-`"random"`. The driver reads its settings from the `driver_settings` section of a
-read group.
+Add the driver to your configuration by setting the `driver.name` field to
+`"random"`. Driver-specific options live under `driver.settings`.
 
 ## Configuration
 
@@ -27,8 +28,27 @@ read group.
 reads: [
     {
         id: "demo",
-        endpoint: {
-            driver: "random"
+        driver: {
+            name: "random",
+            settings: {
+                source: "pseudo",      // pseudo, mersenne (alias) or secure
+                seed: 1337,             // optional deterministic seed
+                defaults: {
+                    min: 0,
+                    max: 100,
+                    true_probability: 0.5,
+                    quality: 0.95,
+                },
+                signals: {
+                    temperature: {
+                        min: 15,
+                        max: 25,
+                    },
+                    heater_enabled: {
+                        true_probability: 0.2,
+                    },
+                },
+            },
         },
         ttl: "750ms",
         signals: [
@@ -41,25 +61,6 @@ reads: [
                 type: "bool",
             },
         ],
-        driver_settings: {
-            source: "pseudo",      // pseudo, mersenne (alias) or secure
-            seed: 1337,             // optional deterministic seed
-            defaults: {
-                min: 0,
-                max: 100,
-                true_probability: 0.5,
-                quality: 0.95,
-            },
-            signals: {
-                temperature: {
-                    min: 15,
-                    max: 25,
-                },
-                heater_enabled: {
-                    true_probability: 0.2,
-                },
-            },
-        },
     },
 ]
 ```

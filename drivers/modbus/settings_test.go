@@ -1,6 +1,7 @@
 package modbus
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -9,43 +10,81 @@ import (
 
 func TestResolveReadGroupAppliesJSONOverrides(t *testing.T) {
 	cfg := config.ReadGroupConfig{
-		ID:       "group1",
-		Function: "holding",
-		Start:    1,
-		Length:   2,
-		DriverSettings: []byte(`{
+		ID: "group1",
+		Driver: config.DriverConfig{Name: "modbus", Settings: []byte(`{
                         "function": "input",
                         "start": 16,
                         "length": 32
-                }`),
+                }`)},
 	}
 
-	resolved, err := resolveReadGroup(cfg)
+	resolved, plan, err := resolveReadGroup(cfg)
 	if err != nil {
 		t.Fatalf("resolveReadGroup: %v", err)
 	}
-	if resolved.Function != "input" {
-		t.Fatalf("unexpected function: got %q want %q", resolved.Function, "input")
+	if plan.Function != "input" {
+		t.Fatalf("unexpected function: got %q want %q", plan.Function, "input")
 	}
-	if resolved.Start != 16 {
-		t.Fatalf("unexpected start: got %d want %d", resolved.Start, 16)
+	if plan.Start != 16 {
+		t.Fatalf("unexpected start: got %d want %d", plan.Start, 16)
 	}
-	if resolved.Length != 32 {
-		t.Fatalf("unexpected length: got %d want %d", resolved.Length, 32)
+	if plan.Length != 32 {
+		t.Fatalf("unexpected length: got %d want %d", plan.Length, 32)
+	}
+	if plan.Legacy {
+		t.Fatal("expected plan to be marked non-legacy")
+	}
+	if len(resolved.DriverMetadata) == 0 {
+		t.Fatal("expected driver metadata to be populated")
 	}
 }
 
 func TestResolveReadGroupInvalidJSON(t *testing.T) {
 	cfg := config.ReadGroupConfig{
-		ID:             "group1",
-		Function:       "holding",
-		Start:          1,
-		Length:         2,
-		DriverSettings: []byte("not-json"),
+		ID:     "group1",
+		Driver: config.DriverConfig{Name: "modbus", Settings: []byte("not-json")},
 	}
 
-	if _, err := resolveReadGroup(cfg); err == nil {
+	if _, _, err := resolveReadGroup(cfg); err == nil {
 		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestResolveReadGroupUsesLegacyFields(t *testing.T) {
+	start := uint16(2)
+	length := uint16(4)
+	cfg := config.ReadGroupConfig{
+		ID:             "group1",
+		LegacyFunction: "holding",
+		LegacyStart:    &start,
+		LegacyLength:   &length,
+	}
+
+	resolved, plan, err := resolveReadGroup(cfg)
+	if err != nil {
+		t.Fatalf("resolveReadGroup: %v", err)
+	}
+	if !plan.Legacy {
+		t.Fatal("expected plan to be marked legacy")
+	}
+	if plan.Function != "holding" {
+		t.Fatalf("unexpected function: got %q want %q", plan.Function, "holding")
+	}
+	if plan.Start != start {
+		t.Fatalf("unexpected start: got %d want %d", plan.Start, start)
+	}
+	if plan.Length != length {
+		t.Fatalf("unexpected length: got %d want %d", plan.Length, length)
+	}
+	if len(resolved.DriverMetadata) == 0 {
+		t.Fatal("expected driver metadata to be populated for legacy plan")
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal(resolved.DriverMetadata, &metadata); err != nil {
+		t.Fatalf("decode driver metadata: %v", err)
+	}
+	if legacy, ok := metadata["legacy"].(bool); !ok || !legacy {
+		t.Fatalf("expected legacy flag in metadata, got %#v", metadata["legacy"])
 	}
 }
 
@@ -55,7 +94,7 @@ func TestResolveWriteTargetAppliesJSONOverrides(t *testing.T) {
 		Function: "holding",
 		Address:  10,
 		Scale:    1,
-		DriverSettings: []byte(`{
+		Driver: config.DriverConfig{Name: "modbus", Settings: []byte(`{
                         "function": "coil",
                         "address": 42,
                         "endianness": "be",
@@ -63,7 +102,7 @@ func TestResolveWriteTargetAppliesJSONOverrides(t *testing.T) {
                         "deadband": 0.5,
                         "rate_limit": "5s",
                         "scale": 2.5
-                }`),
+                }`)},
 	}
 
 	resolved, err := resolveWriteTarget(cfg)
@@ -95,10 +134,10 @@ func TestResolveWriteTargetAppliesJSONOverrides(t *testing.T) {
 
 func TestResolveWriteTargetInvalidJSON(t *testing.T) {
 	cfg := config.WriteTargetConfig{
-		ID:             "target1",
-		Function:       "holding",
-		Address:        10,
-		DriverSettings: []byte("{"),
+		ID:       "target1",
+		Function: "holding",
+		Address:  10,
+		Driver:   config.DriverConfig{Name: "modbus", Settings: []byte("{")},
 	}
 
 	if _, err := resolveWriteTarget(cfg); err == nil {

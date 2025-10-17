@@ -72,15 +72,21 @@ const moduleOverlayContent = `package module
 #Read: {
     id: string
     endpoint: _
-    function: string
-    start: int
-    length: int
     ttl?: string
     signals: [...#ReadSignal]
     disable?: bool
     can?: _
-    driver_settings?: _
+    driver?: {
+        name?: string
+        settings?: _
+        ...
+    }
     metadata?: _
+    driver_metadata?: _
+    // Deprecated fields retained for backward compatibility.
+    function?: string
+    start?: int
+    length?: int
     ...
 }
 

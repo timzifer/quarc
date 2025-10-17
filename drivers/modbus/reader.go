@@ -25,6 +25,7 @@ type readSignal struct {
 
 type readGroup struct {
 	cfg           config.ReadGroupConfig
+	plan          readGroupPlan
 	signals       []readSignal
 	next          time.Time
 	clientFactory ClientFactory
@@ -34,6 +35,7 @@ type readGroup struct {
 	lastRun       time.Time
 	lastDuration  time.Duration
 	activity      activity.Tracker
+	legacyOnce    sync.Once
 }
 
 // NewReaderFactory builds a Modbus read group factory.
@@ -53,17 +55,17 @@ func newReadGroup(cfg config.ReadGroupConfig, deps runtimeReaders.ReaderDependen
 	if cfg.ID == "" {
 		return nil, fmt.Errorf("read group id must not be empty")
 	}
-	resolved, err := resolveReadGroup(cfg)
+	resolved, plan, err := resolveReadGroup(cfg)
 	if err != nil {
 		return nil, err
 	}
-	if resolved.Length == 0 {
+	if plan.Length == 0 {
 		return nil, fmt.Errorf("read group %s length must be >0", resolved.ID)
 	}
-	if resolved.Function == "" {
+	if plan.Function == "" {
 		return nil, fmt.Errorf("read group %s missing function", resolved.ID)
 	}
-	group := &readGroup{cfg: resolved, clientFactory: factory, activity: deps.Activity}
+	group := &readGroup{cfg: resolved, plan: plan, clientFactory: factory, activity: deps.Activity}
 	group.disabled.Store(resolved.Disable)
 	for _, sigCfg := range resolved.Signals {
 		cell, err := deps.Cells.Get(sigCfg.Cell)
@@ -107,6 +109,11 @@ func (g *readGroup) Perform(now time.Time, logger zerolog.Logger) int {
 	if g.disabled.Load() {
 		return 0
 	}
+	if g.plan.Legacy {
+		g.legacyOnce.Do(func() {
+			logger.Warn().Str("group", g.cfg.ID).Msg("modbus read group using deprecated function/start/length fields; move settings into driver.settings")
+		})
+	}
 	errors := 0
 	ttl := g.cfg.TTL.Duration
 	if ttl <= 0 {
@@ -121,7 +128,7 @@ func (g *readGroup) Perform(now time.Time, logger zerolog.Logger) int {
 	}
 
 	start := time.Now()
-	logger.Trace().Str("group", g.cfg.ID).Str("function", strings.ToLower(g.cfg.Function)).Uint16("start", g.cfg.Start).Uint16("length", g.cfg.Length).Msg("read group scheduled")
+	logger.Trace().Str("group", g.cfg.ID).Str("function", strings.ToLower(g.plan.Function)).Uint16("start", g.plan.Start).Uint16("length", g.plan.Length).Msg("read group scheduled")
 
 	if g.client == nil {
 		logger.Trace().Str("group", g.cfg.ID).Msg("creating modbus read client")
@@ -143,7 +150,7 @@ func (g *readGroup) Perform(now time.Time, logger zerolog.Logger) int {
 	}
 
 	for _, sig := range g.signals {
-		if err := sig.apply(raw, g.cfg.Function, now); err != nil {
+		if err := sig.apply(raw, g.plan.Function, now); err != nil {
 			sig.cell.MarkInvalid(now, "read.marshal", err.Error())
 			logger.Error().Err(err).Str("group", g.cfg.ID).Str("cell", sig.cfg.Cell).Msg("signal decode failed")
 			errors++
@@ -176,17 +183,17 @@ func (g *readGroup) ensureClient() (Client, error) {
 }
 
 func (g *readGroup) read(client Client) ([]byte, error) {
-	switch strings.ToLower(g.cfg.Function) {
+	switch strings.ToLower(g.plan.Function) {
 	case "coil", "coils":
-		return client.ReadCoils(g.cfg.Start, g.cfg.Length)
+		return client.ReadCoils(g.plan.Start, g.plan.Length)
 	case "discrete", "discrete_input", "discrete_inputs":
-		return client.ReadDiscreteInputs(g.cfg.Start, g.cfg.Length)
+		return client.ReadDiscreteInputs(g.plan.Start, g.plan.Length)
 	case "holding", "holding_register", "holding_registers":
-		return client.ReadHoldingRegisters(g.cfg.Start, g.cfg.Length)
+		return client.ReadHoldingRegisters(g.plan.Start, g.plan.Length)
 	case "input", "input_register", "input_registers":
-		return client.ReadInputRegisters(g.cfg.Start, g.cfg.Length)
+		return client.ReadInputRegisters(g.plan.Start, g.plan.Length)
 	default:
-		return nil, fmt.Errorf("unsupported function %q", g.cfg.Function)
+		return nil, fmt.Errorf("unsupported function %q", g.plan.Function)
 	}
 }
 
@@ -218,16 +225,27 @@ func (g *readGroup) Status() runtimeReaders.ReadGroupStatus {
 	lastRun := g.lastRun
 	lastDuration := g.lastDuration
 	g.mu.RUnlock()
+	metadata := map[string]interface{}{
+		"function": g.plan.Function,
+		"start":    g.plan.Start,
+		"length":   g.plan.Length,
+	}
+	if g.plan.Legacy {
+		metadata["legacy"] = true
+	}
+	driverName := g.cfg.Driver.Name
+	if driverName == "" {
+		driverName = "modbus"
+	}
 	return runtimeReaders.ReadGroupStatus{
 		ID:           g.cfg.ID,
-		Function:     g.cfg.Function,
-		Start:        g.cfg.Start,
-		Length:       g.cfg.Length,
+		Driver:       driverName,
 		Disabled:     g.disabled.Load(),
 		NextRun:      next,
 		LastRun:      lastRun,
 		LastDuration: lastDuration,
 		Source:       g.cfg.Source,
+		Metadata:     metadata,
 	}
 }
 

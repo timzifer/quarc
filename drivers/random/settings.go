@@ -17,7 +17,7 @@ const (
 	defaultAlphabet              = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 )
 
-// Settings describes the configuration accepted via driver_settings.
+// Settings describes the configuration accepted via driver.settings.
 type Settings struct {
 	Source   string                    `json:"source,omitempty"`
 	Seed     *int64                    `json:"seed,omitempty"`
