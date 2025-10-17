@@ -67,14 +67,17 @@ func newLiveViewTestServer(t *testing.T) (*Service, *liveViewReadGroupStub, *liv
 
 	readStub := &liveViewReadGroupStub{status: readers.ReadGroupStatus{
 		ID:           "telemetry:read-1",
-		Function:     "holding_registers",
-		Start:        1,
-		Length:       2,
+		Driver:       "modbus",
 		Disabled:     false,
 		NextRun:      time.Now().Add(100 * time.Millisecond),
 		LastRun:      time.Now(),
 		LastDuration: 5 * time.Millisecond,
 		Source:       config.ModuleReference{Package: "telemetry"},
+		Metadata: map[string]interface{}{
+			"function": "holding_registers",
+			"start":    uint16(1),
+			"length":   uint16(2),
+		},
 	}}
 
 	writeStub := &liveViewWriterStub{status: writers.WriteTargetStatus{

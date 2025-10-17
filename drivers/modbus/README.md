@@ -94,7 +94,7 @@ You can provide your own `ClientFactory` to support alternative transport layers
 
 ### Read groups
 
-Use `config.ReadGroupConfig` plus optional driver-specific JSON overrides to describe how Modbus data is ingested:
+Use `config.ReadGroupConfig` with driver-specific JSON settings to describe how Modbus data is ingested:
 
 ```json
 {
@@ -107,9 +107,6 @@ Use `config.ReadGroupConfig` plus optional driver-specific JSON overrides to des
       "length": 8
     }
   },
-  "function": "discrete_inputs",
-  "start": 0,
-  "length": 16,
   "signals": [
     { "cell": "line.start", "type": "bool", "offset": 0 },
     { "cell": "line.stop",  "type": "bool", "offset": 1 }
@@ -117,7 +114,7 @@ Use `config.ReadGroupConfig` plus optional driver-specific JSON overrides to des
 }
 ```
 
-The JSON within `driver.settings` is decoded by `resolveReadGroup`, letting you override the protocol function, start address, and length without duplicating the full Quarc config. Signal-level options include:
+The JSON within `driver.settings` is decoded by `resolveReadGroup`, which now resolves the Modbus function, start address, and length exclusively from this block. Legacy `function`/`start`/`length` fields on the read group are ignored after emitting a migration warning. Signal-level options include:
 
 - `offset` – word or bit offset (depending on function type).
 - `bit` – optional bit selection for register-based booleans.

@@ -244,15 +244,21 @@ type ReadGroupConfig struct {
 	ID         string              `json:"id"`
 	Connection string              `json:"connection,omitempty"`
 	Endpoint   EndpointConfig      `json:"endpoint"`
-	Function   string              `json:"function"`
-	Start      uint16              `json:"start"`
-	Length     uint16              `json:"length"`
 	TTL        Duration            `json:"ttl"`
 	Signals    []ReadSignalConfig  `json:"signals"`
 	Disable    bool                `json:"disable,omitempty"`
 	CAN        *CANReadGroupConfig `json:"can,omitempty"`
 	Driver     DriverConfig        `json:"driver"`
-	Source     ModuleReference     `json:"-"`
+	Metadata   json.RawMessage     `json:"metadata,omitempty"`
+	// DriverMetadata carries driver-specific planning hints captured at load time.
+	DriverMetadata json.RawMessage `json:"driver_metadata,omitempty"`
+	// Deprecated: Function is retained for backward compatibility with legacy configurations.
+	LegacyFunction string `json:"function,omitempty"`
+	// Deprecated: Start is retained for backward compatibility with legacy configurations.
+	LegacyStart *uint16 `json:"start,omitempty"`
+	// Deprecated: Length is retained for backward compatibility with legacy configurations.
+	LegacyLength *uint16         `json:"length,omitempty"`
+	Source       ModuleReference `json:"-"`
 }
 
 // CANReadGroupConfig describes how CAN frames should be ingested from a byte stream.

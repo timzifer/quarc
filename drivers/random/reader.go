@@ -3,6 +3,7 @@ package random
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -75,15 +76,13 @@ func NewReadFactory() readers.ReaderFactory {
 				settings: resolved,
 			})
 		}
-		function := cfg.Function
-		if function == "" {
-			function = "random"
+		driverName := strings.TrimSpace(cfg.Driver.Name)
+		if driverName == "" {
+			driverName = "random"
 		}
 		group := &randomReadGroup{
 			id:           cfg.ID,
-			function:     function,
-			start:        cfg.Start,
-			length:       cfg.Length,
+			driver:       driverName,
 			source:       cfg.Source,
 			interval:     cfg.TTL.Duration,
 			generator:    source,
@@ -140,11 +139,9 @@ func (s randomSignal) generate(src randomSource) (interface{}, *float64, error) 
 }
 
 type randomReadGroup struct {
-	id       string
-	function string
-	start    uint16
-	length   uint16
-	source   config.ModuleReference
+	id     string
+	driver string
+	source config.ModuleReference
 
 	interval  time.Duration
 	generator randomSource
@@ -242,9 +239,7 @@ func (g *randomReadGroup) Status() readers.ReadGroupStatus {
 	}
 	return readers.ReadGroupStatus{
 		ID:           g.id,
-		Function:     g.function,
-		Start:        g.start,
-		Length:       g.length,
+		Driver:       g.driver,
 		Disabled:     g.disabled.Load(),
 		NextRun:      g.nextRun,
 		LastRun:      g.lastRun,
