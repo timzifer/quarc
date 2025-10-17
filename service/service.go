@@ -294,20 +294,6 @@ func New(cfg *config.Config, logger zerolog.Logger, opts ...Option) (*Service, e
 			writerFactories[name] = factories.Writer
 		}
 	}
-	connectionFactories := make(map[string]connections.Factory)
-	readerFactories := make(map[string]readers.ReaderFactory)
-	writerFactories := make(map[string]writers.WriterFactory)
-	for name, factories := range registry.drivers {
-		if factories.Connection != nil {
-			connectionFactories[name] = factories.Connection
-		}
-		if factories.Reader != nil {
-			readerFactories[name] = factories.Reader
-		}
-		if factories.Writer != nil {
-			writerFactories[name] = factories.Writer
-		}
-	}
 	dsl, err := newDSLEngine(cfg.DSL, cfg.Helpers, logger)
 	if err != nil {
 		return nil, err
@@ -523,6 +509,20 @@ func Validate(cfg *config.Config, logger zerolog.Logger, opts ...Option) error {
 	}
 
 	registry := applyOptions(newFactoryRegistry(), opts)
+	connectionFactories := make(map[string]connections.Factory)
+	readerFactories := make(map[string]readers.ReaderFactory)
+	writerFactories := make(map[string]writers.WriterFactory)
+	for name, factories := range registry.drivers {
+		if factories.Connection != nil {
+			connectionFactories[name] = factories.Connection
+		}
+		if factories.Reader != nil {
+			readerFactories[name] = factories.Reader
+		}
+		if factories.Writer != nil {
+			writerFactories[name] = factories.Writer
+		}
+	}
 	dsl, err := newDSLEngine(cfg.DSL, cfg.Helpers, logger)
 	if err != nil {
 		return err
