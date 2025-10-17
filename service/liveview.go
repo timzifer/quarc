@@ -77,15 +77,14 @@ type liveReadGroup struct {
 	ID             string                      `json:"id"`
 	Package        string                      `json:"package,omitempty"`
 	LocalID        string                      `json:"local_id,omitempty"`
-	Function       string                      `json:"function"`
-	Start          uint16                      `json:"start"`
-	Length         uint16                      `json:"length"`
+	Driver         string                      `json:"driver,omitempty"`
 	Disabled       bool                        `json:"disabled"`
 	NextRun        *time.Time                  `json:"next_run,omitempty"`
 	LastRun        *time.Time                  `json:"last_run,omitempty"`
 	LastDurationMS float64                     `json:"last_duration_ms"`
 	Source         config.ModuleReference      `json:"source,omitempty"`
 	Buffers        map[string]liveSignalBuffer `json:"buffers,omitempty"`
+	Metadata       map[string]interface{}      `json:"metadata,omitempty"`
 }
 
 type liveSignalAggregate struct {
@@ -221,14 +220,15 @@ func toLiveReadGroup(status readers.ReadGroupStatus) liveReadGroup {
 		ID:             status.ID,
 		Package:        pkg,
 		LocalID:        local,
-		Function:       status.Function,
-		Start:          status.Start,
-		Length:         status.Length,
+		Driver:         status.Driver,
 		Disabled:       status.Disabled,
 		NextRun:        timePtr(status.NextRun),
 		LastRun:        timePtr(status.LastRun),
 		LastDurationMS: durationToMillis(status.LastDuration),
 		Source:         status.Source,
+	}
+	if len(status.Metadata) > 0 {
+		group.Metadata = status.Metadata
 	}
 	if len(status.Buffers) > 0 {
 		buffers := make(map[string]liveSignalBuffer, len(status.Buffers))

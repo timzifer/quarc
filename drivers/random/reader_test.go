@@ -155,7 +155,7 @@ func TestRandomReadFactoryProducesValues(t *testing.T) {
 
 	status := group.Status()
 	require.Equal(t, "random.read", status.ID)
-	require.Equal(t, "random", status.Function)
+	require.Equal(t, "random", status.Driver)
 	require.True(t, status.NextRun.After(now))
 	require.NotZero(t, status.LastDuration)
 	require.Contains(t, status.Buffers, "temperature")
