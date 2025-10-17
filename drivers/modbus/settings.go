@@ -8,17 +8,19 @@ import (
 )
 
 type readGroupOverrides struct {
-	Function string  `json:"function"`
-	Start    *uint16 `json:"start"`
-	Length   *uint16 `json:"length"`
-	Legacy   bool    `json:"legacy,omitempty"`
+	Function   string  `json:"function"`
+	Start      *uint16 `json:"start"`
+	Length     *uint16 `json:"length"`
+	MaxGapSize *uint16 `json:"max_gap_size"`
+	Legacy     bool    `json:"legacy,omitempty"`
 }
 
 type readGroupPlan struct {
-	Function string
-	Start    uint16
-	Length   uint16
-	Legacy   bool
+	Function   string
+	Start      uint16
+	Length     uint16
+	MaxGapSize uint16
+	Legacy     bool
 }
 
 type writeTargetOverrides struct {
@@ -37,6 +39,7 @@ func resolveReadGroup(cfg config.ReadGroupConfig) (config.ReadGroupConfig, readG
 	functionSet := false
 	startSet := false
 	lengthSet := false
+	gapSet := false
 
 	if len(cfg.Driver.Settings) > 0 {
 		var overrides readGroupOverrides
@@ -54,6 +57,10 @@ func resolveReadGroup(cfg config.ReadGroupConfig) (config.ReadGroupConfig, readG
 		if overrides.Length != nil {
 			plan.Length = *overrides.Length
 			lengthSet = true
+		}
+		if overrides.MaxGapSize != nil {
+			plan.MaxGapSize = *overrides.MaxGapSize
+			gapSet = true
 		}
 	}
 
@@ -73,6 +80,10 @@ func resolveReadGroup(cfg config.ReadGroupConfig) (config.ReadGroupConfig, readG
 		if metadata.Length != nil && !lengthSet {
 			plan.Length = *metadata.Length
 			lengthSet = true
+		}
+		if metadata.MaxGapSize != nil && !gapSet {
+			plan.MaxGapSize = *metadata.MaxGapSize
+			gapSet = true
 		}
 		if metadata.Legacy {
 			plan.Legacy = true
@@ -109,9 +120,14 @@ func resolveReadGroup(cfg config.ReadGroupConfig) (config.ReadGroupConfig, readG
 	if len(cfg.DriverMetadata) > 0 {
 		_ = json.Unmarshal(cfg.DriverMetadata, &metadata)
 	}
+	if !gapSet {
+		plan.MaxGapSize = plan.Length
+	}
+
 	metadata["function"] = plan.Function
 	metadata["start"] = plan.Start
 	metadata["length"] = plan.Length
+	metadata["max_gap_size"] = plan.MaxGapSize
 	if plan.Legacy {
 		metadata["legacy"] = true
 	} else {

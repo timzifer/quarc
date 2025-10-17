@@ -3,6 +3,7 @@ package modbus
 import (
 	"encoding/binary"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,8 @@ type readGroup struct {
 	cfg           config.ReadGroupConfig
 	plan          readGroupPlan
 	signals       []readSignal
+	requests      []plannedRequest
+	signalPlan    []int
 	next          time.Time
 	clientFactory ClientFactory
 	client        Client
@@ -36,6 +39,110 @@ type readGroup struct {
 	lastDuration  time.Duration
 	activity      activity.Tracker
 	legacyOnce    sync.Once
+}
+
+type plannedRequest struct {
+	Start      uint16
+	Length     uint16
+	BaseOffset uint16
+	Signals    []int
+}
+
+func (g *readGroup) planRequests() error {
+	if len(g.signals) == 0 {
+		g.requests = nil
+		g.signalPlan = nil
+		return nil
+	}
+	type signalRef struct {
+		index  int
+		offset uint16
+	}
+	refs := make([]signalRef, len(g.signals))
+	for i := range g.signals {
+		refs[i] = signalRef{index: i, offset: g.signals[i].cfg.Offset}
+	}
+	sort.SliceStable(refs, func(i, j int) bool {
+		if refs[i].offset == refs[j].offset {
+			return refs[i].index < refs[j].index
+		}
+		return refs[i].offset < refs[j].offset
+	})
+	maxGap := int(g.plan.MaxGapSize)
+	length := int(g.plan.Length)
+	segments := make([]plannedRequest, 0)
+	signalPlan := make([]int, len(g.signals))
+	for i := range signalPlan {
+		signalPlan[i] = -1
+	}
+	type segment struct {
+		start   int
+		end     int
+		signals []int
+	}
+	var current segment
+	for i, ref := range refs {
+		if int(ref.offset) >= length {
+			return fmt.Errorf("read group %s: signal offset %d exceeds length %d", g.cfg.ID, ref.offset, g.plan.Length)
+		}
+		if i == 0 {
+			current = segment{start: int(ref.offset), end: int(ref.offset), signals: []int{ref.index}}
+			continue
+		}
+		if ref.offset < uint16(current.start) {
+			refOffset := int(ref.offset)
+			current.signals = append(current.signals, ref.index)
+			if refOffset < current.start {
+				current.start = refOffset
+			}
+			continue
+		}
+		if int(ref.offset) > current.end {
+			gap := int(ref.offset) - current.end - 1
+			if gap > maxGap {
+				segments = append(segments, plannedRequest{})
+				segIndex := len(segments) - 1
+				segments[segIndex] = plannedRequest{
+					Start:      g.plan.Start + uint16(current.start),
+					Length:     uint16(current.end-current.start) + 1,
+					BaseOffset: uint16(current.start),
+					Signals:    append([]int(nil), current.signals...),
+				}
+				for _, idx := range current.signals {
+					signalPlan[idx] = segIndex
+				}
+				current = segment{start: int(ref.offset), end: int(ref.offset), signals: []int{ref.index}}
+				continue
+			}
+			current.end = int(ref.offset)
+		}
+		current.signals = append(current.signals, ref.index)
+	}
+	if len(current.signals) > 0 {
+		segments = append(segments, plannedRequest{
+			Start:      g.plan.Start + uint16(current.start),
+			Length:     uint16(current.end-current.start) + 1,
+			BaseOffset: uint16(current.start),
+			Signals:    append([]int(nil), current.signals...),
+		})
+		segIndex := len(segments) - 1
+		for _, idx := range current.signals {
+			signalPlan[idx] = segIndex
+		}
+	}
+	for i, seg := range segments {
+		absStart := int(g.plan.Start) + int(seg.BaseOffset)
+		if absStart > 0xFFFF {
+			return fmt.Errorf("read group %s: planned start %d exceeds modbus address space", g.cfg.ID, absStart)
+		}
+		if int(seg.BaseOffset)+int(seg.Length) > length {
+			return fmt.Errorf("read group %s: planned segment exceeds configured length", g.cfg.ID)
+		}
+		segments[i].Start = uint16(absStart)
+	}
+	g.requests = segments
+	g.signalPlan = signalPlan
+	return nil
 }
 
 // NewReaderFactory builds a Modbus read group factory.
@@ -80,6 +187,9 @@ func newReadGroup(cfg config.ReadGroupConfig, deps runtimeReaders.ReaderDependen
 			return nil, fmt.Errorf("read group %s signal %s type mismatch (cell %s is %s, signal is %s)", resolved.ID, sigCfg.Cell, sigCfg.Cell, cellCfg.Type, sigCfg.Type)
 		}
 		group.signals = append(group.signals, readSignal{cfg: sigCfg, cell: cell, cellConfig: cellCfg})
+	}
+	if err := group.planRequests(); err != nil {
+		return nil, err
 	}
 	return group, nil
 }
@@ -128,7 +238,7 @@ func (g *readGroup) Perform(now time.Time, logger zerolog.Logger) int {
 	}
 
 	start := time.Now()
-	logger.Trace().Str("group", g.cfg.ID).Str("function", strings.ToLower(g.plan.Function)).Uint16("start", g.plan.Start).Uint16("length", g.plan.Length).Msg("read group scheduled")
+	logger.Trace().Str("group", g.cfg.ID).Str("function", strings.ToLower(g.plan.Function)).Uint16("start", g.plan.Start).Uint16("length", g.plan.Length).Uint16("max_gap_size", g.plan.MaxGapSize).Int("requests", len(g.requests)).Msg("read group scheduled")
 
 	if g.client == nil {
 		logger.Trace().Str("group", g.cfg.ID).Msg("creating modbus read client")
@@ -149,8 +259,19 @@ func (g *readGroup) Perform(now time.Time, logger zerolog.Logger) int {
 		return 1
 	}
 
-	for _, sig := range g.signals {
-		if err := sig.apply(raw, g.plan.Function, now); err != nil {
+	for i, sig := range g.signals {
+		reqIndex := -1
+		if len(g.signalPlan) > 0 {
+			reqIndex = g.signalPlan[i]
+		}
+		if reqIndex < 0 || reqIndex >= len(raw) {
+			sig.cell.MarkInvalid(now, "read.plan", "signal not mapped to request payload")
+			logger.Error().Str("group", g.cfg.ID).Str("cell", sig.cfg.Cell).Msg("signal not mapped to request")
+			errors++
+			continue
+		}
+		segment := g.requests[reqIndex]
+		if err := sig.apply(raw[reqIndex], g.plan.Function, now, segment.BaseOffset); err != nil {
 			sig.cell.MarkInvalid(now, "read.marshal", err.Error())
 			logger.Error().Err(err).Str("group", g.cfg.ID).Str("cell", sig.cfg.Cell).Msg("signal decode failed")
 			errors++
@@ -182,19 +303,34 @@ func (g *readGroup) ensureClient() (Client, error) {
 	return client, nil
 }
 
-func (g *readGroup) read(client Client) ([]byte, error) {
-	switch strings.ToLower(g.plan.Function) {
-	case "coil", "coils":
-		return client.ReadCoils(g.plan.Start, g.plan.Length)
-	case "discrete", "discrete_input", "discrete_inputs":
-		return client.ReadDiscreteInputs(g.plan.Start, g.plan.Length)
-	case "holding", "holding_register", "holding_registers":
-		return client.ReadHoldingRegisters(g.plan.Start, g.plan.Length)
-	case "input", "input_register", "input_registers":
-		return client.ReadInputRegisters(g.plan.Start, g.plan.Length)
-	default:
-		return nil, fmt.Errorf("unsupported function %q", g.plan.Function)
+func (g *readGroup) read(client Client) ([][]byte, error) {
+	if len(g.requests) == 0 {
+		return nil, nil
 	}
+	segments := make([][]byte, len(g.requests))
+	for i, req := range g.requests {
+		var (
+			payload []byte
+			err     error
+		)
+		switch strings.ToLower(g.plan.Function) {
+		case "coil", "coils":
+			payload, err = client.ReadCoils(req.Start, req.Length)
+		case "discrete", "discrete_input", "discrete_inputs":
+			payload, err = client.ReadDiscreteInputs(req.Start, req.Length)
+		case "holding", "holding_register", "holding_registers":
+			payload, err = client.ReadHoldingRegisters(req.Start, req.Length)
+		case "input", "input_register", "input_registers":
+			payload, err = client.ReadInputRegisters(req.Start, req.Length)
+		default:
+			return nil, fmt.Errorf("unsupported function %q", g.plan.Function)
+		}
+		if err != nil {
+			return nil, err
+		}
+		segments[i] = payload
+	}
+	return segments, nil
 }
 
 func (g *readGroup) invalidateAll(ts time.Time, code, message string) {
@@ -226,9 +362,11 @@ func (g *readGroup) Status() runtimeReaders.ReadGroupStatus {
 	lastDuration := g.lastDuration
 	g.mu.RUnlock()
 	metadata := map[string]interface{}{
-		"function": g.plan.Function,
-		"start":    g.plan.Start,
-		"length":   g.plan.Length,
+		"function":      g.plan.Function,
+		"start":         g.plan.Start,
+		"length":        g.plan.Length,
+		"max_gap_size":  g.plan.MaxGapSize,
+		"request_count": len(g.requests),
 	}
 	if g.plan.Legacy {
 		metadata["legacy"] = true
@@ -257,31 +395,31 @@ func (g *readGroup) closeClient() {
 	g.client = nil
 }
 
-func (s *readSignal) apply(raw []byte, function string, ts time.Time) error {
+func (s *readSignal) apply(raw []byte, function string, ts time.Time, baseOffset uint16) error {
 	if len(raw) == 0 {
 		return fmt.Errorf("no data returned")
 	}
 	switch s.cfg.Type {
 	case config.ValueKindBool:
-		value, err := s.boolValue(raw, function)
+		value, err := s.boolValue(raw, function, baseOffset)
 		if err != nil {
 			return err
 		}
 		return s.cell.SetValue(value, ts, nil)
 	case config.ValueKindNumber, config.ValueKindFloat:
-		value, err := s.numberValue(raw, function)
+		value, err := s.numberValue(raw, function, baseOffset)
 		if err != nil {
 			return err
 		}
 		return s.cell.SetValue(value, ts, nil)
 	case config.ValueKindInteger:
-		value, err := s.integerValue(raw, function)
+		value, err := s.integerValue(raw, function, baseOffset)
 		if err != nil {
 			return err
 		}
 		return s.cell.SetValue(value, ts, nil)
 	case config.ValueKindDecimal:
-		value, err := s.decimalValue(raw, function)
+		value, err := s.decimalValue(raw, function, baseOffset)
 		if err != nil {
 			return err
 		}
@@ -295,10 +433,13 @@ func (s *readSignal) apply(raw []byte, function string, ts time.Time) error {
 	}
 }
 
-func (s *readSignal) boolValue(raw []byte, function string) (bool, error) {
+func (s *readSignal) boolValue(raw []byte, function string, baseOffset uint16) (bool, error) {
 	switch strings.ToLower(function) {
 	case "coil", "coils", "discrete", "discrete_input", "discrete_inputs":
-		bitIndex := int(s.cfg.Offset)
+		if s.cfg.Offset < baseOffset {
+			return false, fmt.Errorf("offset %d before segment base %d", s.cfg.Offset, baseOffset)
+		}
+		bitIndex := int(s.cfg.Offset - baseOffset)
 		byteIndex := bitIndex / 8
 		bit := uint(bitIndex % 8)
 		if byteIndex >= len(raw) {
@@ -307,7 +448,7 @@ func (s *readSignal) boolValue(raw []byte, function string) (bool, error) {
 		val := (raw[byteIndex] >> bit) & 0x01
 		return val == 1, nil
 	case "holding", "holding_register", "holding_registers", "input", "input_register", "input_registers":
-		word, err := s.readWord(raw)
+		word, err := s.readWord(raw, baseOffset)
 		if err != nil {
 			return false, err
 		}
@@ -324,10 +465,10 @@ func (s *readSignal) boolValue(raw []byte, function string) (bool, error) {
 	}
 }
 
-func (s *readSignal) numberValue(raw []byte, function string) (float64, error) {
+func (s *readSignal) numberValue(raw []byte, function string, baseOffset uint16) (float64, error) {
 	switch strings.ToLower(function) {
 	case "holding", "holding_register", "holding_registers", "input", "input_register", "input_registers":
-		word, err := s.readWord(raw)
+		word, err := s.readWord(raw, baseOffset)
 		if err != nil {
 			return 0, err
 		}
@@ -344,10 +485,10 @@ func (s *readSignal) numberValue(raw []byte, function string) (float64, error) {
 	}
 }
 
-func (s *readSignal) integerValue(raw []byte, function string) (int64, error) {
+func (s *readSignal) integerValue(raw []byte, function string, baseOffset uint16) (int64, error) {
 	switch strings.ToLower(function) {
 	case "holding", "holding_register", "holding_registers", "input", "input_register", "input_registers":
-		word, err := s.readWord(raw)
+		word, err := s.readWord(raw, baseOffset)
 		if err != nil {
 			return 0, err
 		}
@@ -360,10 +501,10 @@ func (s *readSignal) integerValue(raw []byte, function string) (int64, error) {
 	}
 }
 
-func (s *readSignal) decimalValue(raw []byte, function string) (decimal.Decimal, error) {
+func (s *readSignal) decimalValue(raw []byte, function string, baseOffset uint16) (decimal.Decimal, error) {
 	switch strings.ToLower(function) {
 	case "holding", "holding_register", "holding_registers", "input", "input_register", "input_registers":
-		word, err := s.readWord(raw)
+		word, err := s.readWord(raw, baseOffset)
 		if err != nil {
 			return decimal.Zero, err
 		}
@@ -382,8 +523,11 @@ func (s *readSignal) decimalValue(raw []byte, function string) (decimal.Decimal,
 	}
 }
 
-func (s *readSignal) readWord(raw []byte) (uint16, error) {
-	offset := int(s.cfg.Offset) * 2
+func (s *readSignal) readWord(raw []byte, baseOffset uint16) (uint16, error) {
+	if s.cfg.Offset < baseOffset {
+		return 0, fmt.Errorf("offset %d before segment base %d", s.cfg.Offset, baseOffset)
+	}
+	offset := int(s.cfg.Offset-baseOffset) * 2
 	if offset+1 >= len(raw) {
 		return 0, fmt.Errorf("offset %d out of range", s.cfg.Offset)
 	}
