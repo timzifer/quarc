@@ -1,6 +1,6 @@
-# quarc_driver_modbus
+# QUARC Modbus driver
 
-A Modbus/TCP driver for the [Quarc](https://quarc.dev) industrial automation runtime. The package ships factories for reader and writer groups, configuration helpers, and a default Quarc module overlay so that Modbus-specific options can be described directly in CUE or JSON-based deployment manifests.
+A Modbus/TCP driver for the [Quarc](https://quarc.dev) industrial automation runtime. The package ships factories for reader and writer groups, configuration helpers, and a default Quarc module overlay so that Modbus-specific options can be described directly in CUE or JSON-based deployment manifests. The driver now lives inside the primary `github.com/timzifer/quarc` module and is available without pulling in an auxiliary repository.
 
 ## Features
 
@@ -12,11 +12,7 @@ A Modbus/TCP driver for the [Quarc](https://quarc.dev) industrial automation run
 
 ## Installation
 
-```bash
-go get github.com/timzifer/quarc_driver_modbus
-```
-
-The module targets Go 1.25+. Ensure the Quarc runtime and its configuration packages are available in your project (see `go.mod`).
+The module targets Go 1.25+. Since the driver is part of the Quarc repository, add `github.com/timzifer/quarc` to your `go.mod` to access both the runtime and the Modbus factories.
 
 ## Quick start
 
@@ -29,13 +25,13 @@ import (
     "context"
     "time"
 
-    modbusdriver "github.com/timzifer/quarc_driver_modbus"
     "github.com/timzifer/quarc/config"
+    "github.com/timzifer/quarc/drivers/modbus"
     runtimeReaders "github.com/timzifer/quarc/runtime/readers"
 )
 
 func main() {
-    readerFactory := modbusdriver.NewReaderFactory(nil) // uses the default TCP client
+    readerFactory := modbus.NewReaderFactory(nil) // uses the default TCP client
 
     cfg := config.ReadGroupConfig{
         ID:       "temperature", 
