@@ -14,7 +14,8 @@ func TestResolveReadGroupAppliesJSONOverrides(t *testing.T) {
 		Driver: config.DriverConfig{Name: "modbus", Settings: []byte(`{
                         "function": "input",
                         "start": 16,
-                        "length": 32
+                        "length": 32,
+                        "max_gap_size": 4
                 }`)},
 	}
 
@@ -36,6 +37,9 @@ func TestResolveReadGroupAppliesJSONOverrides(t *testing.T) {
 	}
 	if len(resolved.DriverMetadata) == 0 {
 		t.Fatal("expected driver metadata to be populated")
+	}
+	if plan.MaxGapSize != 4 {
+		t.Fatalf("unexpected max gap size: got %d want %d", plan.MaxGapSize, 4)
 	}
 }
 
@@ -76,6 +80,9 @@ func TestResolveReadGroupUsesLegacyFields(t *testing.T) {
 	if plan.Length != length {
 		t.Fatalf("unexpected length: got %d want %d", plan.Length, length)
 	}
+	if plan.MaxGapSize != length {
+		t.Fatalf("unexpected max gap size: got %d want %d", plan.MaxGapSize, length)
+	}
 	if len(resolved.DriverMetadata) == 0 {
 		t.Fatal("expected driver metadata to be populated for legacy plan")
 	}
@@ -85,6 +92,25 @@ func TestResolveReadGroupUsesLegacyFields(t *testing.T) {
 	}
 	if legacy, ok := metadata["legacy"].(bool); !ok || !legacy {
 		t.Fatalf("expected legacy flag in metadata, got %#v", metadata["legacy"])
+	}
+}
+
+func TestResolveReadGroupDefaultsMaxGapToLength(t *testing.T) {
+	cfg := config.ReadGroupConfig{
+		ID: "group1",
+		Driver: config.DriverConfig{Name: "modbus", Settings: []byte(`{
+                        "function": "holding",
+                        "start": 0,
+                        "length": 6
+                }`)},
+	}
+
+	_, plan, err := resolveReadGroup(cfg)
+	if err != nil {
+		t.Fatalf("resolveReadGroup: %v", err)
+	}
+	if plan.MaxGapSize != 6 {
+		t.Fatalf("unexpected max gap size default: got %d want %d", plan.MaxGapSize, 6)
 	}
 }
 
