@@ -47,7 +47,7 @@ func WithProgram(def ProgramDefinition, overlays ...config.OverlayDescriptor) Op
 	}
 }
 
-// WithIOService installs additional reader and writer factories for a driver and publishes overlays.
+// WithIOService installs additional reader, writer and connection factories for a driver and publishes overlays.
 func WithIOService(def IOServiceDefinition, overlays ...config.OverlayDescriptor) Option {
 	if len(overlays) > 0 {
 		def.Overlays = append(def.Overlays, overlays...)

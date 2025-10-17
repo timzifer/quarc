@@ -37,12 +37,13 @@ type ProgramDefinition struct {
 	overlaysRegistered bool
 }
 
-// IOServiceDefinition bundles optional reader and writer factories under a driver identifier.
+// IOServiceDefinition bundles optional reader, writer and connection factories under a driver identifier.
 type IOServiceDefinition struct {
-	Driver   string
-	Reader   serviceio.ReaderFactory
-	Writer   serviceio.WriterFactory
-	Overlays []config.OverlayDescriptor
+	Driver     string
+	Reader     serviceio.ReaderFactory
+	Writer     serviceio.WriterFactory
+	Connection serviceio.ConnectionFactory
+	Overlays   []config.OverlayDescriptor
 
 	overlaysRegistered bool
 }
@@ -504,17 +505,25 @@ func buildServiceOptions(defs []IOServiceDefinition) []service.Option {
 	if len(defs) == 0 {
 		return nil
 	}
-	opts := make([]service.Option, 0, len(defs)*2)
+	opts := make([]service.Option, 0, len(defs))
 	for _, def := range defs {
 		if def.Driver == "" {
 			continue
 		}
+		factories := service.DriverFactories{}
 		if def.Reader != nil {
-			opts = append(opts, service.WithReaderFactory(def.Driver, def.Reader))
+			factories.Reader = def.Reader
 		}
 		if def.Writer != nil {
-			opts = append(opts, service.WithWriterFactory(def.Driver, def.Writer))
+			factories.Writer = def.Writer
 		}
+		if def.Connection != nil {
+			factories.Connection = def.Connection
+		}
+		if factories.Reader == nil && factories.Writer == nil && factories.Connection == nil {
+			continue
+		}
+		opts = append(opts, service.WithDriver(def.Driver, factories))
 	}
 	return opts
 }
