@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/ast"
+	"cuelang.org/go/cue/build"
 	"cuelang.org/go/cue/load"
 	"cuelang.org/go/cue/token"
 )
@@ -407,39 +409,43 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("stat config path: %w", err)
 	}
 
-	var inst *cue.Instance
+	var (
+		inst      *cue.Instance
+		buildInst *build.Instance
+	)
 	if info.IsDir() {
-		inst, err = buildInstance(abs, ".")
+		inst, buildInst, err = buildInstance(abs, ".")
 	} else {
-		inst, err = buildInstance(filepath.Dir(abs), filepath.Base(abs))
+		inst, buildInst, err = buildInstance(filepath.Dir(abs), filepath.Base(abs))
 	}
 	if err != nil {
 		return nil, err
 	}
-	return decodeInstance(abs, inst)
+	return decodeInstance(abs, inst, buildInst)
 }
 
-func buildInstance(dir, target string) (*cue.Instance, error) {
+func buildInstance(dir, target string) (*cue.Instance, *build.Instance, error) {
 	cfg := &load.Config{Dir: dir, AcceptLegacyModules: true}
 	if overlays := ResolveOverlays(dir); len(overlays) > 0 {
 		cfg.Overlay = overlays
 	}
 	instances := load.Instances([]string{target}, cfg)
 	if len(instances) == 0 {
-		return nil, fmt.Errorf("no CUE packages found in %s", dir)
+		return nil, nil, fmt.Errorf("no CUE packages found in %s", dir)
 	}
+	buildInst := instances[0]
 	var runtime cue.Runtime
-	inst, err := runtime.Build(instances[0])
+	inst, err := runtime.Build(buildInst)
 	if err != nil {
-		return nil, fmt.Errorf("build CUE instance: %w", err)
+		return nil, nil, fmt.Errorf("build CUE instance: %w", err)
 	}
 	if err := inst.Err; err != nil {
-		return nil, fmt.Errorf("invalid CUE instance: %w", err)
+		return nil, nil, fmt.Errorf("invalid CUE instance: %w", err)
 	}
-	return inst, nil
+	return inst, buildInst, nil
 }
 
-func decodeInstance(path string, inst *cue.Instance) (*Config, error) {
+func decodeInstance(path string, inst *cue.Instance, buildInst *build.Instance) (*Config, error) {
 	value := inst.Value()
 	configVal := value.LookupPath(cue.MakePath(cue.Str("config")))
 	if !configVal.Exists() {
@@ -456,6 +462,15 @@ func decodeInstance(path string, inst *cue.Instance) (*Config, error) {
 			return nil, fmt.Errorf("read package name: %w", err)
 		}
 	}
+	moduleSources := collectModuleSources(buildInst)
+	rootNamespace := strings.TrimSpace(moduleSources.root.Package)
+	fallbackNamespace := sanitizeNamespace(pkgName)
+	if rootNamespace == "" {
+		rootNamespace = fallbackNamespace
+		moduleSources.root.Package = rootNamespace
+	}
+	pkgPrefix := firstNonEmpty(strings.TrimSpace(explicitPackage), rootNamespace, fallbackNamespace)
+
 	data, err := configVal.MarshalJSON()
 	if err != nil {
 		return nil, fmt.Errorf("encode config to JSON: %w", err)
@@ -464,6 +479,8 @@ func decodeInstance(path string, inst *cue.Instance) (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
+	relativizeModuleSourcePackages(&moduleSources, pkgPrefix)
+	applyModuleSources(&cfg, moduleSources)
 	captureDeclaredSourcePackages(configVal, &cfg)
 	normalizeSignalBuffers(&cfg)
 
@@ -501,7 +518,11 @@ func decodeInstance(path string, inst *cue.Instance) (*Config, error) {
 		}
 	}
 
-	meta := ModuleReference{File: path, Name: cfg.Name, Description: cfg.Description, Package: pkgPrefix}
+	metaFile := path
+	if file := strings.TrimSpace(moduleSources.root.File); file != "" {
+		metaFile = file
+	}
+	meta := ModuleReference{File: metaFile, Name: cfg.Name, Description: cfg.Description, Package: pkgPrefix}
 	cfg.setSource(meta)
 	if err := validateSignalBuffers(&cfg); err != nil {
 		return nil, err
@@ -599,6 +620,434 @@ func normalizeSignalBuffers(cfg *Config) {
 			}
 		}
 	}
+}
+
+type moduleSourceCollection struct {
+	root        ModuleReference
+	connections map[string]ModuleReference
+	cells       map[string]ModuleReference
+	programs    map[string]ModuleReference
+	reads       map[string]ModuleReference
+	writes      map[string]ModuleReference
+	logic       map[string]ModuleReference
+}
+
+func collectModuleSources(inst *build.Instance) moduleSourceCollection {
+	sources := moduleSourceCollection{
+		connections: make(map[string]ModuleReference),
+		cells:       make(map[string]ModuleReference),
+		programs:    make(map[string]ModuleReference),
+		reads:       make(map[string]ModuleReference),
+		writes:      make(map[string]ModuleReference),
+		logic:       make(map[string]ModuleReference),
+	}
+	if inst == nil {
+		return sources
+	}
+	for _, file := range inst.Files {
+		collectFileModuleSources(inst, file, &sources)
+	}
+	return sources
+}
+
+func collectFileModuleSources(inst *build.Instance, file *ast.File, sources *moduleSourceCollection) {
+	if file == nil || sources == nil {
+		return
+	}
+	filename := strings.TrimSpace(file.Filename)
+	if filename == "" {
+		return
+	}
+	filename = filepath.Clean(filename)
+	pkgName := strings.TrimSpace(packageNameFromFile(file))
+	namespace := packageNamespaceForFile(inst, filename, pkgName)
+	visitor := moduleSourceVisitor{
+		instance:  inst,
+		filename:  filename,
+		namespace: namespace,
+		sources:   sources,
+	}
+	visitor.visitDecls(file.Decls)
+}
+
+type moduleSourceVisitor struct {
+	instance  *build.Instance
+	filename  string
+	namespace string
+	sources   *moduleSourceCollection
+}
+
+func (v moduleSourceVisitor) visitDecls(decls []ast.Decl) {
+	for _, decl := range decls {
+		switch d := decl.(type) {
+		case *ast.Field:
+			v.visitField(d)
+		case *ast.StructLit:
+			v.visitStructLit(d, false)
+		case *ast.EmbedDecl:
+			if lit, ok := d.Expr.(*ast.StructLit); ok {
+				v.visitStructLit(lit, false)
+			}
+		}
+	}
+}
+
+func (v moduleSourceVisitor) visitField(field *ast.Field) {
+	if field == nil {
+		return
+	}
+	name, ok := labelName(field.Label)
+	if !ok {
+		return
+	}
+	switch name {
+	case "config":
+		lit, ok := field.Value.(*ast.StructLit)
+		if !ok {
+			return
+		}
+		v.recordRoot()
+		v.visitStructLit(lit, true)
+	default:
+		if lit, ok := field.Value.(*ast.StructLit); ok {
+			v.visitStructLit(lit, false)
+		}
+	}
+}
+
+func (v moduleSourceVisitor) visitStructLit(lit *ast.StructLit, inConfig bool) {
+	if lit == nil {
+		return
+	}
+	for _, elt := range lit.Elts {
+		switch x := elt.(type) {
+		case *ast.Field:
+			name, ok := labelName(x.Label)
+			if !ok {
+				continue
+			}
+			if inConfig {
+				v.captureConfigField(name, x.Value)
+				continue
+			}
+			if name == "config" {
+				body, ok := x.Value.(*ast.StructLit)
+				if !ok {
+					continue
+				}
+				v.recordRoot()
+				v.visitStructLit(body, true)
+				continue
+			}
+			if nested, ok := x.Value.(*ast.StructLit); ok {
+				v.visitStructLit(nested, false)
+			}
+		case *ast.EmbedDecl:
+			if nested, ok := x.Expr.(*ast.StructLit); ok {
+				v.visitStructLit(nested, inConfig)
+			}
+		}
+	}
+}
+
+func (v moduleSourceVisitor) captureConfigField(name string, expr ast.Expr) {
+	if v.sources == nil {
+		return
+	}
+	ref := ModuleReference{File: v.filename, Package: v.namespace}
+	switch name {
+	case "connections":
+		v.captureList(expr, v.sources.connections, ref)
+	case "cells":
+		v.captureList(expr, v.sources.cells, ref)
+	case "programs":
+		v.captureList(expr, v.sources.programs, ref)
+	case "reads":
+		v.captureList(expr, v.sources.reads, ref)
+	case "writes":
+		v.captureList(expr, v.sources.writes, ref)
+	case "logic":
+		v.captureList(expr, v.sources.logic, ref)
+	}
+}
+
+func (v moduleSourceVisitor) captureList(expr ast.Expr, target map[string]ModuleReference, ref ModuleReference) {
+	if target == nil {
+		return
+	}
+	list, ok := expr.(*ast.ListLit)
+	if !ok {
+		return
+	}
+	for _, elt := range list.Elts {
+		lit, ok := elt.(*ast.StructLit)
+		if !ok {
+			continue
+		}
+		id := strings.TrimSpace(extractStringField(lit, "id"))
+		if id == "" {
+			continue
+		}
+		if _, exists := target[id]; exists {
+			continue
+		}
+		target[id] = ref
+	}
+}
+
+func (v moduleSourceVisitor) recordRoot() {
+	if v.sources == nil {
+		return
+	}
+	if strings.TrimSpace(v.sources.root.File) != "" {
+		return
+	}
+	v.sources.root = ModuleReference{File: v.filename, Package: v.namespace}
+}
+
+func packageNameFromFile(file *ast.File) string {
+	if file == nil {
+		return ""
+	}
+	for _, decl := range file.Decls {
+		if pkg, ok := decl.(*ast.Package); ok {
+			if pkg.Name != nil {
+				return strings.TrimSpace(pkg.Name.Name)
+			}
+		}
+	}
+	return ""
+}
+
+func packageNamespaceForFile(inst *build.Instance, filename, pkgName string) string {
+	basePkg := ""
+	if inst != nil {
+		basePkg = sanitizeNamespace(inst.PkgName)
+	}
+	candidate := sanitizeNamespace(pkgName)
+	if basePkg != "" {
+		candidate = trimNamespacePrefix(candidate, basePkg)
+	}
+	relPath := deriveNamespaceFromPath(inst, filename)
+	relDir := strings.TrimSpace(relPath)
+	if relDir != "" {
+		dir := filepath.Dir(relPath)
+		if dir != "." {
+			relDir = dir
+		} else {
+			relDir = ""
+		}
+	}
+	derived := sanitizeNamespace(relDir)
+	return firstNonEmpty(derived, candidate)
+}
+
+func deriveNamespaceFromPath(inst *build.Instance, filename string) string {
+	if inst == nil {
+		return filename
+	}
+	base := firstNonEmpty(strings.TrimSpace(inst.Dir), strings.TrimSpace(inst.Root))
+	rel := filename
+	if strings.TrimSpace(base) != "" {
+		if r, err := filepath.Rel(base, filename); err == nil {
+			rel = r
+		}
+	}
+	rel = strings.TrimSuffix(rel, filepath.Ext(rel))
+	rel = strings.Trim(rel, string(filepath.Separator))
+	if strings.TrimSpace(rel) == "" {
+		return filename
+	}
+	return rel
+}
+
+func sanitizeNamespace(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	raw = strings.ReplaceAll(raw, string(filepath.Separator), ".")
+	raw = strings.ReplaceAll(raw, "::", ".")
+	var builder strings.Builder
+	lastDot := false
+	for _, r := range raw {
+		switch {
+		case r == '.':
+			if lastDot {
+				continue
+			}
+			builder.WriteRune('.')
+			lastDot = true
+		case r == '_':
+			builder.WriteRune('_')
+			lastDot = false
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			builder.WriteRune(r)
+			lastDot = false
+		default:
+			if !lastDot {
+				builder.WriteRune('_')
+				lastDot = false
+			}
+		}
+	}
+	return strings.Trim(builder.String(), ".")
+}
+
+func relativizeModuleSourcePackages(sources *moduleSourceCollection, root string) {
+	if sources == nil {
+		return
+	}
+	root = strings.Trim(strings.TrimSpace(root), ".")
+	adjust := func(ref ModuleReference) ModuleReference {
+		ref.Package = trimNamespacePrefix(ref.Package, root)
+		return ref
+	}
+	for id, ref := range sources.connections {
+		sources.connections[id] = adjust(ref)
+	}
+	for id, ref := range sources.cells {
+		sources.cells[id] = adjust(ref)
+	}
+	for id, ref := range sources.programs {
+		sources.programs[id] = adjust(ref)
+	}
+	for id, ref := range sources.reads {
+		sources.reads[id] = adjust(ref)
+	}
+	for id, ref := range sources.writes {
+		sources.writes[id] = adjust(ref)
+	}
+	for id, ref := range sources.logic {
+		sources.logic[id] = adjust(ref)
+	}
+	if strings.TrimSpace(sources.root.Package) == "" {
+		sources.root.Package = root
+	}
+}
+
+func trimNamespacePrefix(value, root string) string {
+	value = strings.Trim(strings.TrimSpace(value), ".")
+	if value == "" {
+		return ""
+	}
+	root = strings.Trim(strings.TrimSpace(root), ".")
+	if root == "" {
+		return value
+	}
+	if value == root {
+		return ""
+	}
+	prefix := root + "."
+	if strings.HasPrefix(value, prefix) {
+		return strings.Trim(strings.TrimPrefix(value, prefix), ".")
+	}
+	return value
+}
+
+func applyModuleSources(cfg *Config, sources moduleSourceCollection) {
+	if cfg == nil {
+		return
+	}
+	apply := func(target *ModuleReference, ref ModuleReference) {
+		if target == nil {
+			return
+		}
+		if file := strings.TrimSpace(ref.File); file != "" {
+			target.File = file
+		}
+		if pkg := strings.TrimSpace(ref.Package); pkg != "" {
+			target.Package = pkg
+		}
+	}
+	for i := range cfg.Connections {
+		id := strings.TrimSpace(cfg.Connections[i].ID)
+		if id == "" {
+			continue
+		}
+		if ref, ok := sources.connections[id]; ok {
+			apply(&cfg.Connections[i].Source, ref)
+		}
+	}
+	for i := range cfg.Cells {
+		id := strings.TrimSpace(cfg.Cells[i].ID)
+		if id == "" {
+			continue
+		}
+		if ref, ok := sources.cells[id]; ok {
+			apply(&cfg.Cells[i].Source, ref)
+		}
+	}
+	for i := range cfg.Programs {
+		id := strings.TrimSpace(cfg.Programs[i].ID)
+		if id == "" {
+			continue
+		}
+		if ref, ok := sources.programs[id]; ok {
+			apply(&cfg.Programs[i].Source, ref)
+		}
+	}
+	for i := range cfg.Reads {
+		id := strings.TrimSpace(cfg.Reads[i].ID)
+		if id == "" {
+			continue
+		}
+		if ref, ok := sources.reads[id]; ok {
+			apply(&cfg.Reads[i].Source, ref)
+		}
+	}
+	for i := range cfg.Writes {
+		id := strings.TrimSpace(cfg.Writes[i].ID)
+		if id == "" {
+			continue
+		}
+		if ref, ok := sources.writes[id]; ok {
+			apply(&cfg.Writes[i].Source, ref)
+		}
+	}
+	for i := range cfg.Logic {
+		id := strings.TrimSpace(cfg.Logic[i].ID)
+		if id == "" {
+			continue
+		}
+		if ref, ok := sources.logic[id]; ok {
+			apply(&cfg.Logic[i].Source, ref)
+		}
+	}
+}
+
+func labelName(label ast.Label) (string, bool) {
+	name, _, err := ast.LabelName(label)
+	if err != nil {
+		return "", false
+	}
+	return name, true
+}
+
+func extractStringField(lit *ast.StructLit, name string) string {
+	if lit == nil {
+		return ""
+	}
+	for _, elt := range lit.Elts {
+		field, ok := elt.(*ast.Field)
+		if !ok {
+			continue
+		}
+		label, ok := labelName(field.Label)
+		if !ok || label != name {
+			continue
+		}
+		basic, ok := field.Value.(*ast.BasicLit)
+		if !ok || basic.Kind != token.STRING {
+			continue
+		}
+		value, err := strconv.Unquote(basic.Value)
+		if err != nil {
+			continue
+		}
+		return strings.TrimSpace(value)
+	}
+	return ""
 }
 
 func validateSignalBuffers(cfg *Config) error {
