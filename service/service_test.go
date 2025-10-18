@@ -78,6 +78,77 @@ type testClient interface {
 	Close() error
 }
 
+type stubReadPlan struct {
+	Function string  `json:"function"`
+	Start    *uint16 `json:"start"`
+	Length   *uint16 `json:"length"`
+}
+
+func stubDriverSettings(function string, start, length uint16) json.RawMessage {
+	return json.RawMessage(fmt.Sprintf(`{"function":%q,"start":%d,"length":%d}`, function, start, length))
+}
+
+func extractStubPlan(cfg config.ReadGroupConfig) (string, uint16, uint16, error) {
+	var function string
+	var functionSet bool
+	var start uint16
+	var startSet bool
+	var length uint16
+	var lengthSet bool
+
+	decode := func(raw json.RawMessage) error {
+		if len(raw) == 0 {
+			return nil
+		}
+		var plan stubReadPlan
+		if err := json.Unmarshal(raw, &plan); err != nil {
+			return err
+		}
+		if plan.Function != "" {
+			function = plan.Function
+			functionSet = true
+		}
+		if plan.Start != nil {
+			start = *plan.Start
+			startSet = true
+		}
+		if plan.Length != nil {
+			length = *plan.Length
+			lengthSet = true
+		}
+		return nil
+	}
+
+	if err := decode(cfg.Driver.Settings); err != nil {
+		return "", 0, 0, fmt.Errorf("decode driver settings: %w", err)
+	}
+	if err := decode(cfg.DriverMetadata); err != nil {
+		return "", 0, 0, fmt.Errorf("decode driver metadata: %w", err)
+	}
+	if !functionSet && cfg.LegacyFunction != "" {
+		function = cfg.LegacyFunction
+		functionSet = true
+	}
+	if !startSet && cfg.LegacyStart != nil {
+		start = *cfg.LegacyStart
+		startSet = true
+	}
+	if !lengthSet && cfg.LegacyLength != nil {
+		length = *cfg.LegacyLength
+		lengthSet = true
+	}
+	if !functionSet {
+		return "", 0, 0, errors.New("missing function")
+	}
+	if !startSet {
+		return "", 0, 0, errors.New("missing start")
+	}
+	if !lengthSet {
+		return "", 0, 0, errors.New("missing length")
+	}
+	return function, start, length, nil
+}
+
 type testClientFactory func(cfg config.EndpointConfig) (testClient, error)
 
 func stubOptions(factory testClientFactory) []Option {
@@ -149,6 +220,16 @@ func newStubReaderFactory(factory testClientFactory) readers.ReaderFactory {
 				return nil, err
 			}
 		}
+		function, start, length, err := extractStubPlan(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("read group %s: %w", cfg.ID, err)
+		}
+		metadata := map[string]interface{}{
+			"function": function,
+			"start":    start,
+			"length":   length,
+		}
+		driverName := strings.TrimSpace(cfg.Driver.Name)
 		return &stubReadGroup{
 			id:         cfg.ID,
 			client:     client,
@@ -156,9 +237,11 @@ func newStubReaderFactory(factory testClientFactory) readers.ReaderFactory {
 			cell:       cell,
 			buffer:     buffer,
 			cellID:     cellID,
-			function:   cfg.Function,
-			start:      cfg.Start,
-			length:     cfg.Length,
+			driver:     driverName,
+			function:   function,
+			start:      start,
+			length:     length,
+			metadata:   metadata,
 			source:     cfg.Source,
 		}, nil
 	}
@@ -220,9 +303,11 @@ type stubReadGroup struct {
 	cell       state.Cell
 	buffer     *readers.SignalBuffer
 	cellID     string
+	driver     string
 	function   string
 	start      uint16
 	length     uint16
+	metadata   map[string]interface{}
 	source     config.ModuleReference
 
 	disabled     atomic.Bool
@@ -277,13 +362,12 @@ func (g *stubReadGroup) SetDisabled(disabled bool) {
 func (g *stubReadGroup) Status() readers.ReadGroupStatus {
 	return readers.ReadGroupStatus{
 		ID:           g.id,
-		Function:     g.function,
-		Start:        g.start,
-		Length:       g.length,
+		Driver:       g.driver,
 		Disabled:     g.disabled.Load(),
 		LastRun:      g.lastRun,
 		LastDuration: g.lastDuration,
 		Source:       g.source,
+		Metadata:     g.metadata,
 	}
 }
 
@@ -412,10 +496,8 @@ func TestDeterministicCycle(t *testing.T) {
 		Reads: []config.ReadGroupConfig{
 			{
 				ID:       "temperature",
-				Endpoint: config.EndpointConfig{Address: "ignored:502", UnitID: 1, Driver: testDriverName},
-				Function: "holding",
-				Start:    0,
-				Length:   1,
+				Driver:   config.DriverConfig{Name: testDriverName, Settings: stubDriverSettings("holding", 0, 1)},
+				Endpoint: config.EndpointConfig{Address: "ignored:502", UnitID: 1},
 				TTL:      config.Duration{},
 				Signals: []config.ReadSignalConfig{{
 					Cell:   "raw_temp",
@@ -444,7 +526,8 @@ func TestDeterministicCycle(t *testing.T) {
 			{
 				ID:       "write_alarm",
 				Cell:     "alarm",
-				Endpoint: config.EndpointConfig{Address: "ignored:502", UnitID: 1, Driver: testDriverName},
+				Driver:   config.DriverConfig{Name: testDriverName},
+				Endpoint: config.EndpointConfig{Address: "ignored:502", UnitID: 1},
 				Function: "coil",
 				Address:  10,
 			},
@@ -717,10 +800,8 @@ func TestServiceClosesRemoteClients(t *testing.T) {
 		},
 		Reads: []config.ReadGroupConfig{{
 			ID:       "rg",
-			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
-			Function: "holding",
-			Start:    0,
-			Length:   1,
+			Driver:   config.DriverConfig{Name: testDriverName, Settings: stubDriverSettings("holding", 0, 1)},
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1},
 			Signals: []config.ReadSignalConfig{{
 				Cell:   "input",
 				Offset: 0,
@@ -735,7 +816,8 @@ func TestServiceClosesRemoteClients(t *testing.T) {
 		Writes: []config.WriteTargetConfig{{
 			ID:       "wt",
 			Cell:     "output",
-			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
+			Driver:   config.DriverConfig{Name: testDriverName},
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1},
 			Function: "coil",
 			Address:  0,
 		}},
@@ -784,10 +866,8 @@ func TestServiceBufferStatusAndTelemetry(t *testing.T) {
 		Cells: []config.CellConfig{{ID: "input", Type: config.ValueKindNumber}},
 		Reads: []config.ReadGroupConfig{{
 			ID:       "rg",
-			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
-			Function: "holding",
-			Start:    0,
-			Length:   1,
+			Driver:   config.DriverConfig{Name: testDriverName, Settings: stubDriverSettings("holding", 0, 1)},
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1},
 			Signals: []config.ReadSignalConfig{{
 				Cell:       "input",
 				Offset:     0,
@@ -888,10 +968,8 @@ func TestServiceFlushBufferPhaseAppliesAggregations(t *testing.T) {
 		},
 		Reads: []config.ReadGroupConfig{{
 			ID:       "rg",
-			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
-			Function: "holding",
-			Start:    0,
-			Length:   1,
+			Driver:   config.DriverConfig{Name: testDriverName, Settings: stubDriverSettings("holding", 0, 1)},
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1},
 			Signals: []config.ReadSignalConfig{{
 				Cell:       "input",
 				Offset:     0,
@@ -973,10 +1051,8 @@ func TestServiceFlushBufferPhaseHandlesOverflowPolicies(t *testing.T) {
 		},
 		Reads: []config.ReadGroupConfig{{
 			ID:       "rg",
-			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
-			Function: "holding",
-			Start:    0,
-			Length:   1,
+			Driver:   config.DriverConfig{Name: testDriverName, Settings: stubDriverSettings("holding", 0, 1)},
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1},
 			Signals: []config.ReadSignalConfig{{
 				Cell:       "input",
 				Offset:     0,
@@ -1063,10 +1139,8 @@ func TestServiceFlushBufferPhaseAggregationErrorsMarkCellsInvalid(t *testing.T) 
 		},
 		Reads: []config.ReadGroupConfig{{
 			ID:       "rg",
-			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1, Driver: testDriverName},
-			Function: "holding",
-			Start:    0,
-			Length:   1,
+			Driver:   config.DriverConfig{Name: testDriverName, Settings: stubDriverSettings("holding", 0, 1)},
+			Endpoint: config.EndpointConfig{Address: "ignored:1", UnitID: 1},
 			Signals: []config.ReadSignalConfig{{
 				Cell:       "input",
 				Offset:     0,
@@ -1324,10 +1398,9 @@ func TestServiceSharedConnections(t *testing.T) {
 		Cycle: config.Duration{Duration: time.Millisecond},
 		Connections: []config.IOConnectionConfig{{
 			ID:     "stub_bus",
-			Driver: testDriverName,
+			Driver: config.DriverConfig{Name: testDriverName},
 			Endpoint: config.EndpointConfig{
 				Address: "ignored:1",
-				Driver:  testDriverName,
 			},
 		}},
 		Cells: []config.CellConfig{
@@ -1337,10 +1410,7 @@ func TestServiceSharedConnections(t *testing.T) {
 		Reads: []config.ReadGroupConfig{{
 			ID:         "rg",
 			Connection: "stub_bus",
-			Endpoint:   config.EndpointConfig{Driver: testDriverName},
-			Function:   "holding",
-			Start:      0,
-			Length:     1,
+			Driver:     config.DriverConfig{Name: testDriverName, Settings: stubDriverSettings("holding", 0, 1)},
 			Signals: []config.ReadSignalConfig{{
 				Cell:   "input",
 				Offset: 0,
@@ -1351,7 +1421,7 @@ func TestServiceSharedConnections(t *testing.T) {
 			ID:         "wt",
 			Cell:       "output",
 			Connection: "stub_bus",
-			Endpoint:   config.EndpointConfig{Driver: testDriverName},
+			Driver:     config.DriverConfig{Name: testDriverName},
 			Function:   "coil",
 			Address:    0,
 		}},

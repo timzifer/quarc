@@ -130,7 +130,7 @@ func TestRandomReadFactoryProducesValues(t *testing.T) {
 			{Cell: "temperature", Type: config.ValueKindNumber},
 			{Cell: "switch", Type: config.ValueKindBool},
 		},
-		DriverSettings: rawSettings,
+		Driver: config.DriverConfig{Name: "random", Settings: rawSettings},
 	}
 
 	deps := readers.ReaderDependencies{Cells: store, Buffers: buffers}
@@ -155,7 +155,7 @@ func TestRandomReadFactoryProducesValues(t *testing.T) {
 
 	status := group.Status()
 	require.Equal(t, "random.read", status.ID)
-	require.Equal(t, "random", status.Function)
+	require.Equal(t, "random", status.Driver)
 	require.True(t, status.NextRun.After(now))
 	require.NotZero(t, status.LastDuration)
 	require.Contains(t, status.Buffers, "temperature")
@@ -182,8 +182,8 @@ func TestRandomReadFactoryUnknownSource(t *testing.T) {
 
 	cfg := config.ReadGroupConfig{
 		ID: "mystery", TTL: config.Duration{Duration: time.Second},
-		Signals:        []config.ReadSignalConfig{{Cell: "value", Type: config.ValueKindInteger}},
-		DriverSettings: raw,
+		Signals: []config.ReadSignalConfig{{Cell: "value", Type: config.ValueKindInteger}},
+		Driver:  config.DriverConfig{Name: "random", Settings: raw},
 	}
 	deps := readers.ReaderDependencies{Cells: store, Buffers: buffers}
 	_, err = NewReadFactory()(cfg, deps)
@@ -201,6 +201,7 @@ func TestRandomReadGroupUnsupportedType(t *testing.T) {
 		ID:      "date-group",
 		TTL:     config.Duration{Duration: time.Second},
 		Signals: []config.ReadSignalConfig{{Cell: "date", Type: config.ValueKindDate}},
+		Driver:  config.DriverConfig{Name: "random"},
 	}
 	deps := readers.ReaderDependencies{Cells: store, Buffers: buffers}
 	group, err := NewReadFactory()(cfg, deps)

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -94,7 +95,97 @@ type EndpointConfig struct {
 	Address string   `json:"address"`
 	UnitID  uint8    `json:"unit_id"`
 	Timeout Duration `json:"timeout,omitempty"`
-	Driver  string   `json:"driver,omitempty"`
+}
+
+// DriverConfig encapsulates the protocol driver assigned to a configuration node.
+type DriverConfig struct {
+	Name     string          `json:"name"`
+	Settings json.RawMessage `json:"settings,omitempty"`
+}
+
+// Normalize trims whitespace from the driver name for consistent comparisons.
+func (d *DriverConfig) Normalize() {
+	if d == nil {
+		return
+	}
+	d.Name = strings.TrimSpace(d.Name)
+}
+
+// Clone returns a deep copy of the driver configuration.
+func (d DriverConfig) Clone() DriverConfig {
+	cloned := DriverConfig{Name: strings.TrimSpace(d.Name)}
+	cloned.Settings = cloneRawMessage(d.Settings)
+	return cloned
+}
+
+func cloneRawMessage(data json.RawMessage) json.RawMessage {
+	if len(data) == 0 {
+		return nil
+	}
+	cloned := make(json.RawMessage, len(data))
+	copy(cloned, data)
+	return cloned
+}
+
+func reconcileSpecification(spec *json.RawMessage, legacy *json.RawMessage) {
+	if spec == nil || legacy == nil {
+		return
+	}
+	switch {
+	case len(*spec) > 0:
+		cloned := cloneRawMessage(*spec)
+		*spec = cloned
+		*legacy = cloneRawMessage(cloned)
+	case len(*legacy) > 0:
+		cloned := cloneRawMessage(*legacy)
+		*spec = cloned
+		*legacy = cloneRawMessage(cloned)
+	}
+}
+
+// UnmarshalJSON supports decoding both string and object representations for compatibility.
+func (d *DriverConfig) UnmarshalJSON(data []byte) error {
+	if d == nil {
+		return nil
+	}
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		*d = DriverConfig{}
+		return nil
+	}
+	if trimmed[0] == '"' {
+		var name string
+		if err := json.Unmarshal(trimmed, &name); err != nil {
+			return err
+		}
+		d.Name = strings.TrimSpace(name)
+		d.Settings = nil
+		return nil
+	}
+	type alias struct {
+		Name     string          `json:"name"`
+		Settings json.RawMessage `json:"settings"`
+	}
+	var aux alias
+	if err := json.Unmarshal(trimmed, &aux); err != nil {
+		return err
+	}
+	d.Name = strings.TrimSpace(aux.Name)
+	d.Settings = cloneRawMessage(aux.Settings)
+	return nil
+}
+
+// MarshalJSON encodes the driver configuration using the object representation.
+func (d DriverConfig) MarshalJSON() ([]byte, error) {
+	type alias struct {
+		Name     string          `json:"name"`
+		Settings json.RawMessage `json:"settings,omitempty"`
+	}
+	aux := alias{Name: strings.TrimSpace(d.Name)}
+	if len(d.Settings) > 0 {
+		aux.Settings = d.Settings
+	}
+	return json.Marshal(aux)
 }
 
 // ConnectionPoolingHints exposes optional pooling parameters for reusable connections.
@@ -106,12 +197,12 @@ type ConnectionPoolingHints struct {
 
 // IOConnectionConfig describes a reusable transport connection shared between reads and writes.
 type IOConnectionConfig struct {
-	ID             string                 `json:"id"`
-	Driver         string                 `json:"driver,omitempty"`
-	Endpoint       EndpointConfig         `json:"endpoint"`
-	DriverSettings json.RawMessage        `json:"driver_settings,omitempty"`
-	Pooling        ConnectionPoolingHints `json:"pooling,omitempty"`
-	Source         ModuleReference        `json:"-"`
+	ID            string                 `json:"id"`
+	Specification json.RawMessage        `json:"specification,omitempty"`
+	Driver        DriverConfig           `json:"driver"`
+	Endpoint      EndpointConfig         `json:"endpoint"`
+	Pooling       ConnectionPoolingHints `json:"pooling,omitempty"`
+	Source        ModuleReference        `json:"-"`
 }
 
 // ModuleReference captures metadata about the configuration source that defined an entry.
@@ -168,65 +259,32 @@ type ReadSignalAggregationConfig struct {
 
 // ReadGroupConfig describes a block read.
 type ReadGroupConfig struct {
-	ID             string              `json:"id"`
-	Connection     string              `json:"connection,omitempty"`
-	Endpoint       EndpointConfig      `json:"endpoint"`
-	Function       string              `json:"function"`
-	Start          uint16              `json:"start"`
-	Length         uint16              `json:"length"`
-	TTL            Duration            `json:"ttl"`
-	Signals        []ReadSignalConfig  `json:"signals"`
-	Disable        bool                `json:"disable,omitempty"`
-	CAN            *CANReadGroupConfig `json:"can,omitempty"`
-	DriverSettings json.RawMessage     `json:"driver_settings,omitempty"`
-	Source         ModuleReference     `json:"-"`
-}
-
-// CANReadGroupConfig describes how CAN frames should be ingested from a byte stream.
-type CANReadGroupConfig struct {
-	Protocol    string                  `json:"protocol,omitempty"`
-	Mode        string                  `json:"mode,omitempty"`
-	DBC         string                  `json:"dbc"`
-	BufferSize  int                     `json:"buffer_size,omitempty"`
-	ReadTimeout Duration                `json:"read_timeout,omitempty"`
-	Frames      []CANFrameBindingConfig `json:"frames"`
-}
-
-// CANFrameBindingConfig maps a CAN message to one or more cell updates.
-type CANFrameBindingConfig struct {
-	Message  string                   `json:"message,omitempty"`
-	FrameID  string                   `json:"frame_id,omitempty"`
-	Extended *bool                    `json:"extended,omitempty"`
-	Channel  *uint8                   `json:"channel,omitempty"`
-	Signals  []CANSignalBindingConfig `json:"signals"`
-}
-
-// CANSignalBindingConfig maps a decoded CAN signal to a cell.
-type CANSignalBindingConfig struct {
-	Name    string   `json:"name"`
-	Cell    string   `json:"cell"`
-	Scale   *float64 `json:"scale,omitempty"`
-	Offset  *float64 `json:"offset,omitempty"`
-	Quality *float64 `json:"quality,omitempty"`
+	ID             string             `json:"id"`
+	Connection     string             `json:"connection,omitempty"`
+	Endpoint       EndpointConfig     `json:"endpoint"`
+	TTL            Duration           `json:"ttl"`
+	Signals        []ReadSignalConfig `json:"signals"`
+	Disable        bool               `json:"disable,omitempty"`
+	Specification  json.RawMessage    `json:"specification,omitempty"`
+	Driver         DriverConfig       `json:"driver"`
+	Metadata       json.RawMessage    `json:"metadata,omitempty"`
+	DriverMetadata json.RawMessage    `json:"driver_metadata,omitempty"`
+	Source         ModuleReference    `json:"-"`
 }
 
 // WriteTargetConfig describes how a cell is pushed to Modbus.
 type WriteTargetConfig struct {
-	ID             string          `json:"id"`
-	Cell           string          `json:"cell"`
-	Connection     string          `json:"connection,omitempty"`
-	Endpoint       EndpointConfig  `json:"endpoint"`
-	Function       string          `json:"function"`
-	Address        uint16          `json:"address"`
-	Scale          float64         `json:"scale,omitempty"`
-	Endianness     string          `json:"endianness,omitempty"`
-	Signed         bool            `json:"signed,omitempty"`
-	Deadband       float64         `json:"deadband,omitempty"`
-	RateLimit      Duration        `json:"rate_limit,omitempty"`
-	Priority       int             `json:"priority,omitempty"`
-	Disable        bool            `json:"disable,omitempty"`
-	DriverSettings json.RawMessage `json:"driver_settings,omitempty"`
-	Source         ModuleReference `json:"-"`
+	ID            string          `json:"id"`
+	Cell          string          `json:"cell"`
+	Connection    string          `json:"connection,omitempty"`
+	Endpoint      EndpointConfig  `json:"endpoint"`
+	Deadband      float64         `json:"deadband,omitempty"`
+	RateLimit     Duration        `json:"rate_limit,omitempty"`
+	Priority      int             `json:"priority,omitempty"`
+	Disable       bool            `json:"disable,omitempty"`
+	Specification json.RawMessage `json:"specification,omitempty"`
+	Driver        DriverConfig    `json:"driver"`
+	Source        ModuleReference `json:"-"`
 }
 
 // ProgramSignalConfig maps a program signal onto a cell.
@@ -346,29 +404,6 @@ type WorkerSlots struct {
 	Write   int `json:"write,omitempty"`
 }
 
-// ServerCellConfig maps a cell onto an input register address exposed via the embedded Modbus server.
-//
-// Deprecated: The embedded Modbus server has been removed. This structure is kept
-// only so older configurations continue to decode but it is ignored by the
-// service.
-type ServerCellConfig struct {
-	Cell    string  `json:"cell"`
-	Address uint16  `json:"address"`
-	Scale   float64 `json:"scale,omitempty"`
-	Signed  bool    `json:"signed,omitempty"`
-}
-
-// ServerConfig configures the optional embedded Modbus server.
-//
-// Deprecated: The embedded Modbus server has been removed. The configuration is
-// ignored and retained solely for schema compatibility.
-type ServerConfig struct {
-	Enabled bool               `json:"enabled"`
-	Listen  string             `json:"listen"`
-	UnitID  uint8              `json:"unit_id,omitempty"`
-	Cells   []ServerCellConfig `json:"cells"`
-}
-
 // Config is the root configuration structure for the service.
 type Config struct {
 	Name        string                 `json:"name,omitempty"`
@@ -387,12 +422,8 @@ type Config struct {
 	DSL         DSLConfig              `json:"dsl"`
 	Helpers     []HelperFunctionConfig `json:"helpers,omitempty"`
 	Policies    GlobalPolicies         `json:"policies"`
-	// Deprecated: the embedded Modbus server has been removed. The field is
-	// ignored when loading the configuration and will be dropped in a
-	// future release.
-	Server    ServerConfig    `json:"server"`
-	HotReload bool            `json:"hot_reload,omitempty"`
-	Source    ModuleReference `json:"-"`
+	HotReload   bool                   `json:"hot_reload,omitempty"`
+	Source      ModuleReference        `json:"-"`
 }
 
 // Load reads and decodes the configuration file from disk.
@@ -414,7 +445,7 @@ func Load(path string) (*Config, error) {
 		buildInst *build.Instance
 	)
 	if info.IsDir() {
-		inst, buildInst, err = buildInstance(abs, ".")
+		inst, buildInst, err = buildInstance(abs, "./...")
 	} else {
 		inst, buildInst, err = buildInstance(filepath.Dir(abs), filepath.Base(abs))
 	}
@@ -433,16 +464,26 @@ func buildInstance(dir, target string) (*cue.Instance, *build.Instance, error) {
 	if len(instances) == 0 {
 		return nil, nil, fmt.Errorf("no CUE packages found in %s", dir)
 	}
-	buildInst := instances[0]
+
+	merged := &build.Instance{
+		Dir:        instances[0].Dir,
+		PkgName:    instances[0].PkgName,
+		ImportPath: instances[0].ImportPath,
+		Root:       instances[0].Root,
+	}
+	for _, inst := range instances {
+		merged.Files = append(merged.Files, inst.Files...)
+	}
+
 	var runtime cue.Runtime
-	inst, err := runtime.Build(buildInst)
+	inst, err := runtime.Build(merged)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build CUE instance: %w", err)
 	}
 	if err := inst.Err; err != nil {
 		return nil, nil, fmt.Errorf("invalid CUE instance: %w", err)
 	}
-	return inst, buildInst, nil
+	return inst, merged, nil
 }
 
 func decodeInstance(path string, inst *cue.Instance, buildInst *build.Instance) (*Config, error) {
@@ -483,40 +524,6 @@ func decodeInstance(path string, inst *cue.Instance, buildInst *build.Instance) 
 	applyModuleSources(&cfg, moduleSources)
 	captureDeclaredSourcePackages(configVal, &cfg)
 	normalizeSignalBuffers(&cfg)
-
-	moduleNamespace := strings.TrimSpace(pkgPrefix)
-	if moduleNamespace != "" {
-		for i := range cfg.Connections {
-			if strings.TrimSpace(cfg.Connections[i].Source.Package) == "" {
-				cfg.Connections[i].Source.Package = moduleNamespace
-			}
-		}
-		for i := range cfg.Cells {
-			if strings.TrimSpace(cfg.Cells[i].Source.Package) == "" {
-				cfg.Cells[i].Source.Package = moduleNamespace
-			}
-		}
-		for i := range cfg.Programs {
-			if strings.TrimSpace(cfg.Programs[i].Source.Package) == "" {
-				cfg.Programs[i].Source.Package = moduleNamespace
-			}
-		}
-		for i := range cfg.Reads {
-			if strings.TrimSpace(cfg.Reads[i].Source.Package) == "" {
-				cfg.Reads[i].Source.Package = moduleNamespace
-			}
-		}
-		for i := range cfg.Writes {
-			if strings.TrimSpace(cfg.Writes[i].Source.Package) == "" {
-				cfg.Writes[i].Source.Package = moduleNamespace
-			}
-		}
-		for i := range cfg.Logic {
-			if strings.TrimSpace(cfg.Logic[i].Source.Package) == "" {
-				cfg.Logic[i].Source.Package = moduleNamespace
-			}
-		}
-	}
 
 	metaFile := path
 	if file := strings.TrimSpace(moduleSources.root.File); file != "" {
@@ -702,12 +709,16 @@ func (v moduleSourceVisitor) visitField(field *ast.Field) {
 	}
 	switch name {
 	case "config":
-		lit, ok := field.Value.(*ast.StructLit)
-		if !ok {
-			return
+		switch val := field.Value.(type) {
+		case *ast.StructLit:
+			v.recordRoot()
+			v.visitStructLit(val, true)
+		case *ast.BinaryExpr:
+			if lit, ok := val.Y.(*ast.StructLit); ok {
+				v.recordRoot()
+				v.visitStructLit(lit, true)
+			}
 		}
-		v.recordRoot()
-		v.visitStructLit(lit, true)
 	default:
 		if lit, ok := field.Value.(*ast.StructLit); ok {
 			v.visitStructLit(lit, false)
@@ -1116,28 +1127,13 @@ func applyConnectionDefaults(cfg *Config) error {
 		if _, exists := connections[conn.ID]; exists {
 			return fmt.Errorf("duplicate connection %s", conn.ID)
 		}
-		conn.Driver = strings.TrimSpace(conn.Driver)
-		conn.Endpoint.Driver = strings.TrimSpace(conn.Endpoint.Driver)
+		conn.Driver.Normalize()
 		conn.Endpoint.Address = strings.TrimSpace(conn.Endpoint.Address)
-		if conn.Driver == "" {
-			conn.Driver = conn.Endpoint.Driver
-		}
-		if conn.Driver == "" {
+		if conn.Driver.Name == "" {
 			return fmt.Errorf("connection %s: driver must not be empty", conn.ID)
 		}
-		if conn.Endpoint.Driver == "" {
-			conn.Endpoint.Driver = conn.Driver
-		}
+		reconcileSpecification(&conn.Specification, &conn.Driver.Settings)
 		connections[conn.ID] = conn
-	}
-
-	cloneSettings := func(base json.RawMessage) json.RawMessage {
-		if len(base) == 0 {
-			return nil
-		}
-		cloned := make([]byte, len(base))
-		copy(cloned, base)
-		return cloned
 	}
 
 	mergeEndpoint := func(target *EndpointConfig, base EndpointConfig) {
@@ -1154,18 +1150,40 @@ func applyConnectionDefaults(cfg *Config) error {
 		if target.Timeout.Duration != 0 || base.Timeout.Duration == 0 {
 			merged.Timeout = target.Timeout
 		}
-		if drv := strings.TrimSpace(target.Driver); drv != "" {
-			merged.Driver = drv
-		}
 		*target = merged
+	}
+
+	propagateDriver := func(target *DriverConfig, base DriverConfig, kind, id string) error {
+		if target == nil {
+			return nil
+		}
+		target.Normalize()
+		if target.Name == "" {
+			clone := base.Clone()
+			if len(target.Settings) > 0 {
+				clone.Settings = cloneRawMessage(target.Settings)
+			}
+			*target = clone
+			return nil
+		}
+		if base.Name != "" && target.Name != base.Name {
+			return fmt.Errorf("%s %s: connection requires driver %s but %s requested", kind, id, base.Name, target.Name)
+		}
+		if len(target.Settings) == 0 && len(base.Settings) > 0 {
+			target.Settings = cloneRawMessage(base.Settings)
+		}
+		return nil
 	}
 
 	for i := range cfg.Reads {
 		read := &cfg.Reads[i]
 		read.Connection = strings.TrimSpace(read.Connection)
-		read.Endpoint.Driver = strings.TrimSpace(read.Endpoint.Driver)
 		read.Endpoint.Address = strings.TrimSpace(read.Endpoint.Address)
+		read.Driver.Normalize()
 		if read.Connection == "" {
+			if read.Driver.Name == "" {
+				return fmt.Errorf("read group %s: driver must not be empty", read.ID)
+			}
 			continue
 		}
 		conn, ok := connections[read.Connection]
@@ -1173,23 +1191,20 @@ func applyConnectionDefaults(cfg *Config) error {
 			return fmt.Errorf("read group %s: unknown connection %s", read.ID, read.Connection)
 		}
 		mergeEndpoint(&read.Endpoint, conn.Endpoint)
-		if read.Endpoint.Driver == "" {
-			read.Endpoint.Driver = conn.Driver
-		}
-		if read.Endpoint.Driver != conn.Driver {
-			return fmt.Errorf("read group %s: connection %s uses driver %s but read requests %s", read.ID, read.Connection, conn.Driver, read.Endpoint.Driver)
-		}
-		if len(read.DriverSettings) == 0 && len(conn.DriverSettings) > 0 {
-			read.DriverSettings = cloneSettings(conn.DriverSettings)
+		if err := propagateDriver(&read.Driver, conn.Driver, "read group", read.ID); err != nil {
+			return err
 		}
 	}
 
 	for i := range cfg.Writes {
 		write := &cfg.Writes[i]
 		write.Connection = strings.TrimSpace(write.Connection)
-		write.Endpoint.Driver = strings.TrimSpace(write.Endpoint.Driver)
 		write.Endpoint.Address = strings.TrimSpace(write.Endpoint.Address)
+		write.Driver.Normalize()
 		if write.Connection == "" {
+			if write.Driver.Name == "" {
+				return fmt.Errorf("write target %s: driver must not be empty", write.ID)
+			}
 			continue
 		}
 		conn, ok := connections[write.Connection]
@@ -1197,16 +1212,18 @@ func applyConnectionDefaults(cfg *Config) error {
 			return fmt.Errorf("write target %s: unknown connection %s", write.ID, write.Connection)
 		}
 		mergeEndpoint(&write.Endpoint, conn.Endpoint)
-		if write.Endpoint.Driver == "" {
-			write.Endpoint.Driver = conn.Driver
-		}
-		if write.Endpoint.Driver != conn.Driver {
-			return fmt.Errorf("write target %s: connection %s uses driver %s but write requests %s", write.ID, write.Connection, conn.Driver, write.Endpoint.Driver)
-		}
-		if len(write.DriverSettings) == 0 && len(conn.DriverSettings) > 0 {
-			write.DriverSettings = cloneSettings(conn.DriverSettings)
+		if err := propagateDriver(&write.Driver, conn.Driver, "write target", write.ID); err != nil {
+			return err
 		}
 	}
+
+	for i := range cfg.Reads {
+		reconcileSpecification(&cfg.Reads[i].Specification, &cfg.Reads[i].Driver.Settings)
+	}
+	for i := range cfg.Writes {
+		reconcileSpecification(&cfg.Writes[i].Specification, &cfg.Writes[i].Driver.Settings)
+	}
+
 	return nil
 }
 
@@ -1250,13 +1267,6 @@ func qualifyConfig(cfg *Config, pkg string) {
 				cfg.Reads[i].Signals[j].Aggregations[k].Quality = qualifyRef(namespace, cfg.Reads[i].Signals[j].Aggregations[k].Quality)
 			}
 		}
-		if cfg.Reads[i].CAN != nil {
-			for j := range cfg.Reads[i].CAN.Frames {
-				for k := range cfg.Reads[i].CAN.Frames[j].Signals {
-					cfg.Reads[i].CAN.Frames[j].Signals[k].Cell = qualifyRef(namespace, cfg.Reads[i].CAN.Frames[j].Signals[k].Cell)
-				}
-			}
-		}
 	}
 	for i := range cfg.Writes {
 		namespace := combineNamespaces(root, cfg.Writes[i].Source.Package)
@@ -1273,9 +1283,6 @@ func qualifyConfig(cfg *Config, pkg string) {
 		}
 	}
 	serverNamespace := combineNamespaces(root, cfg.Source.Package)
-	for i := range cfg.Server.Cells {
-		cfg.Server.Cells[i].Cell = qualifyRef(serverNamespace, cfg.Server.Cells[i].Cell)
-	}
 	cfg.Policies.WatchdogCell = qualifyRef(serverNamespace, cfg.Policies.WatchdogCell)
 }
 
@@ -1481,26 +1488,41 @@ func captureDeclaredSourcePackages(configVal cue.Value, cfg *Config) {
 	}
 
 	if pkg := extractPackageFromValue(configVal); pkg != "" {
-		cfg.Source.Package = pkg
+		// Only apply the package if there isn't one already.
+		if cfg.Source.Package == "" {
+			cfg.Source.Package = pkg
+		}
 	}
 
 	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("connections"))), len(cfg.Connections), func(i int, pkg string) {
-		cfg.Connections[i].Source.Package = pkg
+		if cfg.Connections[i].Source.Package == "" {
+			cfg.Connections[i].Source.Package = pkg
+		}
 	})
 	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("cells"))), len(cfg.Cells), func(i int, pkg string) {
-		cfg.Cells[i].Source.Package = pkg
+		if cfg.Cells[i].Source.Package == "" {
+			cfg.Cells[i].Source.Package = pkg
+		}
 	})
 	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("programs"))), len(cfg.Programs), func(i int, pkg string) {
-		cfg.Programs[i].Source.Package = pkg
+		if cfg.Programs[i].Source.Package == "" {
+			cfg.Programs[i].Source.Package = pkg
+		}
 	})
 	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("reads"))), len(cfg.Reads), func(i int, pkg string) {
-		cfg.Reads[i].Source.Package = pkg
+		if cfg.Reads[i].Source.Package == "" {
+			cfg.Reads[i].Source.Package = pkg
+		}
 	})
 	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("writes"))), len(cfg.Writes), func(i int, pkg string) {
-		cfg.Writes[i].Source.Package = pkg
+		if cfg.Writes[i].Source.Package == "" {
+			cfg.Writes[i].Source.Package = pkg
+		}
 	})
 	captureListPackages(configVal.LookupPath(cue.MakePath(cue.Str("logic"))), len(cfg.Logic), func(i int, pkg string) {
-		cfg.Logic[i].Source.Package = pkg
+		if cfg.Logic[i].Source.Package == "" {
+			cfg.Logic[i].Source.Package = pkg
+		}
 	})
 }
 

@@ -166,18 +166,19 @@ func (s systemLoad) snapshot() systemLoadSnapshot {
 
 type Option func(*factoryRegistry)
 
+// DriverFactories captures the optional components a driver can expose.
+type DriverFactories struct {
+	Reader     readers.ReaderFactory
+	Writer     writers.WriterFactory
+	Connection connections.Factory
+}
+
 type factoryRegistry struct {
-	readers     map[string]readers.ReaderFactory
-	writers     map[string]writers.WriterFactory
-	connections map[string]connections.Factory
+	drivers map[string]DriverFactories
 }
 
 func newFactoryRegistry() factoryRegistry {
-	return factoryRegistry{
-		readers:     make(map[string]readers.ReaderFactory),
-		writers:     make(map[string]writers.WriterFactory),
-		connections: make(map[string]connections.Factory),
-	}
+	return factoryRegistry{drivers: make(map[string]DriverFactories)}
 }
 
 func applyOptions(reg factoryRegistry, opts []Option) factoryRegistry {
@@ -189,23 +190,49 @@ func applyOptions(reg factoryRegistry, opts []Option) factoryRegistry {
 	return reg
 }
 
+// WithDriver registers or updates the factories associated with a driver.
+func WithDriver(driver string, factories DriverFactories) Option {
+	return func(reg *factoryRegistry) {
+		if reg == nil {
+			return
+		}
+		driver = strings.TrimSpace(driver)
+		if driver == "" {
+			return
+		}
+		if reg.drivers == nil {
+			reg.drivers = make(map[string]DriverFactories)
+		}
+		current := reg.drivers[driver]
+		if factories.Reader != nil {
+			current.Reader = factories.Reader
+		}
+		if factories.Writer != nil {
+			current.Writer = factories.Writer
+		}
+		if factories.Connection != nil {
+			current.Connection = factories.Connection
+		}
+		reg.drivers[driver] = current
+	}
+}
+
 // WithReaderFactory registers or overrides a reader factory for a driver identifier.
 func WithReaderFactory(driver string, factory readers.ReaderFactory) Option {
 	return func(reg *factoryRegistry) {
 		if reg == nil {
 			return
 		}
-		if reg.readers == nil {
-			reg.readers = make(map[string]readers.ReaderFactory)
-		}
+		driver = strings.TrimSpace(driver)
 		if driver == "" {
 			return
 		}
-		if factory == nil {
-			delete(reg.readers, driver)
-			return
+		if reg.drivers == nil {
+			reg.drivers = make(map[string]DriverFactories)
 		}
-		reg.readers[driver] = factory
+		entry := reg.drivers[driver]
+		entry.Reader = factory
+		reg.drivers[driver] = entry
 	}
 }
 
@@ -215,17 +242,16 @@ func WithWriterFactory(driver string, factory writers.WriterFactory) Option {
 		if reg == nil {
 			return
 		}
-		if reg.writers == nil {
-			reg.writers = make(map[string]writers.WriterFactory)
-		}
+		driver = strings.TrimSpace(driver)
 		if driver == "" {
 			return
 		}
-		if factory == nil {
-			delete(reg.writers, driver)
-			return
+		if reg.drivers == nil {
+			reg.drivers = make(map[string]DriverFactories)
 		}
-		reg.writers[driver] = factory
+		entry := reg.drivers[driver]
+		entry.Writer = factory
+		reg.drivers[driver] = entry
 	}
 }
 
@@ -235,17 +261,16 @@ func WithConnectionFactory(driver string, factory connections.Factory) Option {
 		if reg == nil {
 			return
 		}
-		if reg.connections == nil {
-			reg.connections = make(map[string]connections.Factory)
-		}
+		driver = strings.TrimSpace(driver)
 		if driver == "" {
 			return
 		}
-		if factory == nil {
-			delete(reg.connections, driver)
-			return
+		if reg.drivers == nil {
+			reg.drivers = make(map[string]DriverFactories)
 		}
-		reg.connections[driver] = factory
+		entry := reg.drivers[driver]
+		entry.Connection = factory
+		reg.drivers[driver] = entry
 	}
 }
 
@@ -255,6 +280,20 @@ func New(cfg *config.Config, logger zerolog.Logger, opts ...Option) (*Service, e
 		return nil, errors.New("config must not be nil")
 	}
 	registry := applyOptions(newFactoryRegistry(), opts)
+	connectionFactories := make(map[string]connections.Factory)
+	readerFactories := make(map[string]readers.ReaderFactory)
+	writerFactories := make(map[string]writers.WriterFactory)
+	for name, factories := range registry.drivers {
+		if factories.Connection != nil {
+			connectionFactories[name] = factories.Connection
+		}
+		if factories.Reader != nil {
+			readerFactories[name] = factories.Reader
+		}
+		if factories.Writer != nil {
+			writerFactories[name] = factories.Writer
+		}
+	}
 	dsl, err := newDSLEngine(cfg.DSL, cfg.Helpers, logger)
 	if err != nil {
 		return nil, err
@@ -281,7 +320,7 @@ func New(cfg *config.Config, logger zerolog.Logger, opts ...Option) (*Service, e
 	svc.heatmap = newHeatmapSettings(cfg.LiveView.Heatmap)
 	svc.activity = newActivityTracker(&svc.cycleIndex, svc.heatmap)
 
-	connManager, err := newConnectionManager(cfg.Connections, registry.connections)
+	connManager, err := newConnectionManager(cfg.Connections, connectionFactories)
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +334,7 @@ func New(cfg *config.Config, logger zerolog.Logger, opts ...Option) (*Service, e
 
 	bufferStore := readers.NewSignalBufferStore()
 	deps := readers.ReaderDependencies{Cells: cells, Activity: svc.activity, Buffers: bufferStore, Connections: connManager}
-	reads, bufferCells, bufferGroups, err := buildReadGroups(cfg.Reads, deps, registry.readers)
+	reads, bufferCells, bufferGroups, err := buildReadGroups(cfg.Reads, deps, readerFactories)
 	if err != nil {
 		return cleanupOnErr(err)
 	}
@@ -333,7 +372,7 @@ func New(cfg *config.Config, logger zerolog.Logger, opts ...Option) (*Service, e
 	}
 	svc.programs = programs
 
-	writes, err := buildWriteTargets(cfg.Writes, writers.WriterDependencies{Cells: cells, Connections: connManager}, registry.writers)
+	writes, err := buildWriteTargets(cfg.Writes, writers.WriterDependencies{Cells: cells, Connections: connManager}, writerFactories)
 	if err != nil {
 		return cleanupOnErr(err)
 	}
@@ -413,9 +452,9 @@ func buildReadGroups(cfgs []config.ReadGroupConfig, deps readers.ReaderDependenc
 			}
 		}
 
-		driver := cfg.Endpoint.Driver
+		driver := strings.TrimSpace(cfg.Driver.Name)
 		if driver == "" {
-			return nil, nil, nil, fmt.Errorf("read group %s: endpoint missing driver", cfg.ID)
+			return nil, nil, nil, fmt.Errorf("read group %s: driver must not be empty", cfg.ID)
 		}
 		if cfg.Connection != "" && deps.Connections == nil {
 			return nil, nil, nil, fmt.Errorf("read group %s: connections manager not initialised", cfg.ID)
@@ -443,9 +482,9 @@ func buildWriteTargets(cfgs []config.WriteTargetConfig, deps writers.WriterDepen
 	})
 	targets := make([]writers.Writer, 0, len(sorted))
 	for _, cfg := range sorted {
-		driver := cfg.Endpoint.Driver
+		driver := strings.TrimSpace(cfg.Driver.Name)
 		if driver == "" {
-			return nil, fmt.Errorf("write target %s: endpoint missing driver", cfg.ID)
+			return nil, fmt.Errorf("write target %s: driver must not be empty", cfg.ID)
 		}
 		if cfg.Connection != "" && deps.Connections == nil {
 			return nil, fmt.Errorf("write target %s: connections manager not initialised", cfg.ID)
@@ -470,6 +509,20 @@ func Validate(cfg *config.Config, logger zerolog.Logger, opts ...Option) error {
 	}
 
 	registry := applyOptions(newFactoryRegistry(), opts)
+	connectionFactories := make(map[string]connections.Factory)
+	readerFactories := make(map[string]readers.ReaderFactory)
+	writerFactories := make(map[string]writers.WriterFactory)
+	for name, factories := range registry.drivers {
+		if factories.Connection != nil {
+			connectionFactories[name] = factories.Connection
+		}
+		if factories.Reader != nil {
+			readerFactories[name] = factories.Reader
+		}
+		if factories.Writer != nil {
+			writerFactories[name] = factories.Writer
+		}
+	}
 	dsl, err := newDSLEngine(cfg.DSL, cfg.Helpers, logger)
 	if err != nil {
 		return err
@@ -478,13 +531,13 @@ func Validate(cfg *config.Config, logger zerolog.Logger, opts ...Option) error {
 	if err != nil {
 		return err
 	}
-	connManager, err := newConnectionManager(cfg.Connections, registry.connections)
+	connManager, err := newConnectionManager(cfg.Connections, connectionFactories)
 	if err != nil {
 		return err
 	}
 	defer connManager.Close()
 	deps := readers.ReaderDependencies{Cells: cells, Buffers: readers.NewSignalBufferStore(), Connections: connManager}
-	if _, _, _, err := buildReadGroups(cfg.Reads, deps, registry.readers); err != nil {
+	if _, _, _, err := buildReadGroups(cfg.Reads, deps, readerFactories); err != nil {
 		return err
 	}
 	if _, _, err := newLogicBlocks(cfg.Logic, cells, dsl, logger, nil); err != nil {
@@ -493,7 +546,7 @@ func Validate(cfg *config.Config, logger zerolog.Logger, opts ...Option) error {
 	if _, err := newProgramBindings(cfg.Programs, cells, logger, nil); err != nil {
 		return err
 	}
-	if _, err := buildWriteTargets(cfg.Writes, writers.WriterDependencies{Cells: cells, Connections: connManager}, registry.writers); err != nil {
+	if _, err := buildWriteTargets(cfg.Writes, writers.WriterDependencies{Cells: cells, Connections: connManager}, writerFactories); err != nil {
 		return err
 	}
 	if cfg.Server.Enabled {

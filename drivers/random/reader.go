@@ -3,6 +3,7 @@ package random
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,8 +17,8 @@ import (
 )
 
 // NewReadFactory returns a readers.ReaderFactory that produces random values within
-// configurable ranges. The factory consumes the read group's driver_settings node
-// to determine the random source and per-signal bounds.
+// configurable ranges. The factory consumes the read group's specification (or
+// legacy driver.settings) to determine the random source and per-signal bounds.
 func NewReadFactory() readers.ReaderFactory {
 	return func(cfg config.ReadGroupConfig, deps readers.ReaderDependencies) (readers.ReadGroup, error) {
 		if cfg.ID == "" {
@@ -37,7 +38,11 @@ func NewReadFactory() readers.ReaderFactory {
 		if deps.Cells == nil {
 			return nil, fmt.Errorf("read group %s: dependencies missing cell store", cfg.ID)
 		}
-		settings, err := parseSettings(cfg.DriverSettings)
+		payload := cfg.Specification
+		if len(payload) == 0 {
+			payload = cfg.Driver.Settings
+		}
+		settings, err := parseSettings(payload)
 		if err != nil {
 			return nil, fmt.Errorf("read group %s: %w", cfg.ID, err)
 		}
@@ -75,15 +80,13 @@ func NewReadFactory() readers.ReaderFactory {
 				settings: resolved,
 			})
 		}
-		function := cfg.Function
-		if function == "" {
-			function = "random"
+		driverName := strings.TrimSpace(cfg.Driver.Name)
+		if driverName == "" {
+			driverName = "random"
 		}
 		group := &randomReadGroup{
 			id:           cfg.ID,
-			function:     function,
-			start:        cfg.Start,
-			length:       cfg.Length,
+			driver:       driverName,
 			source:       cfg.Source,
 			interval:     cfg.TTL.Duration,
 			generator:    source,
@@ -140,11 +143,9 @@ func (s randomSignal) generate(src randomSource) (interface{}, *float64, error) 
 }
 
 type randomReadGroup struct {
-	id       string
-	function string
-	start    uint16
-	length   uint16
-	source   config.ModuleReference
+	id     string
+	driver string
+	source config.ModuleReference
 
 	interval  time.Duration
 	generator randomSource
@@ -242,9 +243,7 @@ func (g *randomReadGroup) Status() readers.ReadGroupStatus {
 	}
 	return readers.ReadGroupStatus{
 		ID:           g.id,
-		Function:     g.function,
-		Start:        g.start,
-		Length:       g.length,
+		Driver:       g.driver,
 		Disabled:     g.disabled.Load(),
 		NextRun:      g.nextRun,
 		LastRun:      g.lastRun,

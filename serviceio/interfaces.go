@@ -1,6 +1,7 @@
 package serviceio
 
 import (
+	connections "github.com/timzifer/quarc/runtime/connections"
 	readers "github.com/timzifer/quarc/runtime/readers"
 	state "github.com/timzifer/quarc/runtime/state"
 	writers "github.com/timzifer/quarc/runtime/writers"
@@ -35,3 +36,6 @@ type WriterDependencies = writers.WriterDependencies
 
 // Deprecated: use runtime/writers.WriterFactory.
 type WriterFactory = writers.WriterFactory
+
+// Deprecated: use runtime/connections.Factory.
+type ConnectionFactory = connections.Factory

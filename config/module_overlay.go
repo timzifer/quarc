@@ -28,12 +28,11 @@ const moduleOverlayContent = `package module
     workers?: _
     dsl?: _
     policies?: _
-    server?: _
     hot_reload?: bool
     programs?: [...#Program]
     cells?: [...#Cell]
     reads?: [...#Read]
-    writes?: [..._]
+    writes?: [...#Write]
     logic?: [..._]
     ...
 }
@@ -72,15 +71,36 @@ const moduleOverlayContent = `package module
 #Read: {
     id: string
     endpoint: _
-    function: string
-    start: int
-    length: int
     ttl?: string
     signals: [...#ReadSignal]
     disable?: bool
-    can?: _
-    driver_settings?: _
+    specification?: _
+    driver?: {
+        name?: string
+        settings?: specification
+        ...
+    }
     metadata?: _
+    driver_metadata?: _
+    ...
+}
+
+#Write: {
+    id: string
+    cell: string
+    connection?: string
+    endpoint: _
+    priority?: int
+    disable?: bool
+    specification?: _
+    driver?: {
+        name?: string
+        settings?: specification
+        ...
+    }
+    metadata?: _
+    deadband?: number
+    rate_limit?: string
     ...
 }
 

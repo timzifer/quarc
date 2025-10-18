@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/timzifer/quarc/config"
@@ -20,10 +21,11 @@ func newConnectionManager(cfgs []config.IOConnectionConfig, factories map[string
 		if connCfg.ID == "" {
 			continue
 		}
-		factory := factories[connCfg.Driver]
+		driver := strings.TrimSpace(connCfg.Driver.Name)
+		factory := factories[driver]
 		if factory == nil {
 			manager.Close()
-			return nil, fmt.Errorf("connection %s: no factory registered for driver %s", connCfg.ID, connCfg.Driver)
+			return nil, fmt.Errorf("connection %s: no factory registered for driver %s", connCfg.ID, driver)
 		}
 		handle, err := factory(connCfg)
 		if err != nil {

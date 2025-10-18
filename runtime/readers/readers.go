@@ -28,15 +28,14 @@ type ReadGroup interface {
 
 type ReadGroupStatus struct {
 	ID           string
-	Function     string
-	Start        uint16
-	Length       uint16
+	Driver       string
 	Disabled     bool
 	NextRun      time.Time
 	LastRun      time.Time
 	LastDuration time.Duration
 	Source       config.ModuleReference
 	Buffers      map[string]SignalBufferStatus
+	Metadata     map[string]interface{}
 }
 
 // SignalBufferStatus captures diagnostic information about a buffered signal.
